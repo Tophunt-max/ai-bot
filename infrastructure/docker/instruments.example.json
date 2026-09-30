@@ -1,0 +1,20 @@
+[
+  {
+    "id": "NSE:RELIANCE",
+    "exchange": "NSE",
+    "tradingSymbol": "RELIANCE",
+    "instrumentType": "EQ",
+    "lotSize": 1,
+    "tickSize": 0.05,
+    "brokerTokens": { "zerodha": "738561", "dhan": "2885", "upstox": "NSE_EQ|INE002A01018" }
+  },
+  {
+    "id": "NSE:INFY",
+    "exchange": "NSE",
+    "tradingSymbol": "INFY",
+    "instrumentType": "EQ",
+    "lotSize": 1,
+    "tickSize": 0.05,
+    "brokerTokens": { "zerodha": "408065", "dhan": "1594", "upstox": "NSE_EQ|INE009A01021" }
+  }
+]

@@ -1,13 +1,14 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import { verifySignedRequest } from "@atb/trading-core";
+import type { TradingEngine } from "./engine";
 import type { OrderExecutor } from "./executor";
 
 /**
  * Gateway HTTP API. Reached ONLY via Cloudflare Tunnel (no public inbound port).
  * All mutating routes require the Worker's HMAC signature.
  */
-export function createGatewayApp(executor: OrderExecutor, hmacSecret: string) {
+export function createGatewayApp(executor: OrderExecutor, hmacSecret: string, engine?: TradingEngine) {
   const app = new Hono();
   app.use("*", secureHeaders());
 
@@ -36,6 +37,8 @@ export function createGatewayApp(executor: OrderExecutor, hmacSecret: string) {
   });
 
   app.post("/v1/reconcile", signed, async (c) => c.json(await executor.reconcileUnknown()));
+
+  app.get("/v1/engine", signed, (c) => c.json(engine ? engine.status() : { error: "engine not running" }));
 
   return app;
 }

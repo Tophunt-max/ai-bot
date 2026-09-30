@@ -11,8 +11,13 @@ services:
     env_file: .env
     environment:
       AI_SERVICE_URL: http://ai-service:8000
+      INSTRUMENTS_FILE: /app/config/instruments.json
+      STATE_FILE: /app/state/engine.json
     # No published ports: reachable only through cloudflared on the internal network.
     expose: ["8080"]
+    volumes:
+      - ./instruments.json:/app/config/instruments.json:ro
+      - gateway-state:/app/state
     read_only: true
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
@@ -36,6 +41,10 @@ services:
     restart: unless-stopped
     environment:
       AI_SERVICE_SECRET: ${AI_SERVICE_SECRET}
+      MODELS_DIR: /app/models
+      META_MODEL_ID: meta-ensemble
+    volumes:
+      - ./models:/app/models:ro # registry.json + *.joblib (synced from R2 / training box)
     expose: ["8000"]
     read_only: true
     tmpfs: ["/tmp"]
@@ -52,3 +61,6 @@ services:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on: [gateway]
     logging: *logging
+
+volumes:
+  gateway-state:

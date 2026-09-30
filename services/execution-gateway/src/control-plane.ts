@@ -19,8 +19,30 @@ export interface HeartbeatResponse {
   limits: RiskLimits;
 }
 
+export type GatewayEventType =
+  "SIGNAL" | "ORDER" | "TRADE_OPENED" | "TRADE_CLOSED" | "RISK_EVENT" | "POSITIONS";
+
+export interface GatewayEvent {
+  id: string; // idempotency key for ingestion
+  type: GatewayEventType;
+  at: number;
+  mode: TradingMode;
+  payload: Record<string, unknown>;
+}
+
+export interface ReconciliationSnapshot {
+  equity: number;
+  dailyRealisedPnl: number;
+  weeklyRealisedPnl: number;
+  openRisk: number;
+  openPositions: number;
+}
+
 export interface ControlPlane {
   heartbeat(req: HeartbeatRequest): Promise<HeartbeatResponse>;
+  postEvents?(nodeId: string, events: GatewayEvent[]): Promise<void>;
+  reconciliation?(snap: ReconciliationSnapshot): Promise<void>;
+  killSwitch?(trigger: KillSwitchTrigger, reason: string): Promise<void>;
 }
 
 /** Signed client for the Cloudflare Worker gateway endpoints. */
@@ -46,5 +68,17 @@ export class HttpControlPlane implements ControlPlane {
 
   heartbeat(req: HeartbeatRequest): Promise<HeartbeatResponse> {
     return this.post("/heartbeat", req);
+  }
+
+  async postEvents(nodeId: string, events: GatewayEvent[]): Promise<void> {
+    await this.post("/events", { nodeId, events });
+  }
+
+  async reconciliation(snap: ReconciliationSnapshot): Promise<void> {
+    await this.post("/reconciliation", snap);
+  }
+
+  async killSwitch(trigger: KillSwitchTrigger, reason: string): Promise<void> {
+    await this.post("/kill-switch", { trigger, reason });
   }
 }
