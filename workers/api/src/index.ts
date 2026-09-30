@@ -1,7 +1,10 @@
 import { toIst } from "@atb/trading-core";
 import { app } from "./app";
 import type { Env } from "./env";
-import { OWNER_ACCOUNT } from "./env";
+import { ACCOUNT_IDS } from "./env";
+import type { AccountId } from "@atb/shared-types";
+import type { RiskManagerDO } from "./do/risk-manager";
+import type { TradingAccountDO } from "./do/trading-account";
 import { deliver, type NotifyMessage } from "./lib/notify";
 
 export { TradingAccountDO } from "./do/trading-account";
@@ -36,43 +39,10 @@ export default {
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const ist = toIst(controller.scheduledTime);
-    const risk = env.RISK_MANAGER.get(env.RISK_MANAGER.idFromName(OWNER_ACCOUNT));
-    const account = env.TRADING_ACCOUNT.get(env.TRADING_ACCOUNT.idFromName(OWNER_ACCOUNT));
-
-    switch (controller.cron) {
-      case "30 0 * * *":
-        await once(env, "daily-risk-reset", ist.date, async () => {
-          await risk.dailyReset(ist.date, ist.weekday === 1);
-        });
-        break;
-      case "45 2 * * 1-5":
-        await once(env, "session-prep", ist.date, async () => {
-          // Phase 4+: refresh instruments/holidays, verify broker session via gateway.
-          await env.Q_ANALYTICS.send({ type: "SESSION_PREP", date: ist.date });
-        });
-        break;
-      case "*/5 3-10 * * 1-5": {
-        // Gateway liveness: no fresh lease => block new trades (fail closed).
-        const s = await account.getState();
-        if (!s.lease || s.lease.expiresAt < Date.now() - 60_000) {
-          const snap = await risk.getSnapshot();
-          if (!snap.state.tradingLocked) {
-            await risk.lock("SYSTEM_FAILURE");
-            ctx.waitUntil(
-              env.Q_NOTIFICATIONS.send({
-                event: "BROKER_ERROR",
-                message: "Execution gateway heartbeat lost",
-              }),
-            );
-          }
-        }
-        break;
-      }
-      case "30 10 * * 1-5":
-        await once(env, "daily-report", ist.date, async () => {
-          await env.Q_ANALYTICS.send({ type: "DAILY_REPORT", date: ist.date });
-        });
-        break;
+    for (const id of ACCOUNT_IDS) {
+      const risk = env.RISK_MANAGER.get(env.RISK_MANAGER.idFromName(id));
+      const account = env.TRADING_ACCOUNT.get(env.TRADING_ACCOUNT.idFromName(id));
+      await runCron(controller.cron, id, ist, env, ctx, risk, account);
     }
   },
 
@@ -96,3 +66,51 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env, Record<string, unknown>>;
+
+async function runCron(
+  cron: string,
+  id: AccountId,
+  ist: ReturnType<typeof toIst>,
+  env: Env,
+  ctx: ExecutionContext,
+  risk: DurableObjectStub<RiskManagerDO>,
+  account: DurableObjectStub<TradingAccountDO>,
+): Promise<void> {
+  const controller = { cron };
+  switch (controller.cron) {
+    case "30 0 * * *":
+      await once(env, `daily-risk-reset:${id}`, ist.date, async () => {
+        await risk.dailyReset(ist.date, ist.weekday === 1);
+      });
+      break;
+    case "45 2 * * 1-5":
+      await once(env, `session-prep:${id}`, ist.date, async () => {
+        // Phase 4+: refresh instruments/holidays, verify broker session via gateway.
+        await env.Q_ANALYTICS.send({ type: "SESSION_PREP", account: id, date: ist.date });
+      });
+      break;
+    case "*/5 3-10 * * 1-5": {
+      // Gateway liveness: no fresh lease => block new trades (fail closed).
+      const s = await account.getState(id);
+      if (!s.lease || s.lease.expiresAt < Date.now() - 60_000) {
+        const snap = await risk.getSnapshot();
+        if (!snap.state.tradingLocked) {
+          await risk.lock("SYSTEM_FAILURE");
+          ctx.waitUntil(
+            env.Q_NOTIFICATIONS.send({
+              event: "BROKER_ERROR",
+              message: `[${id.toUpperCase()}] Execution gateway heartbeat lost — new trades locked`,
+              dedupeKey: `hb-lost-${id}-${Math.floor(Date.now() / 3_600_000)}`,
+            }),
+          );
+        }
+      }
+      break;
+    }
+    case "30 10 * * 1-5":
+      await once(env, `daily-report:${id}`, ist.date, async () => {
+        await env.Q_ANALYTICS.send({ type: "DAILY_REPORT", account: id, date: ist.date });
+      });
+      break;
+  }
+}

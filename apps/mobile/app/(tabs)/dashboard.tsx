@@ -1,18 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, ErrorText, Loading, Muted, Row, Screen, inr } from "../../src/components/ui";
+import { AccountSwitcher } from "../../src/components/account";
 import { api, qk } from "../../src/lib/api";
+import { useAccount } from "../../src/stores/account";
 
 export default function Dashboard() {
+  const account = useAccount((s) => s.account);
   const q = useQuery({ queryKey: qk.portfolio, queryFn: api.portfolio });
   if (q.isLoading)
     return (
       <Screen title="Dashboard">
+        <AccountSwitcher />
         <Loading />
       </Screen>
     );
   if (q.error)
     return (
       <Screen title="Dashboard">
+        <AccountSwitcher />
         <ErrorText error={q.error} />
       </Screen>
     );
@@ -21,7 +26,8 @@ export default function Dashboard() {
 
   return (
     <Screen title="Dashboard">
-      <Card title="Portfolio">
+      <AccountSwitcher />
+      <Card title={account === "demo" ? "Demo portfolio (virtual money)" : "Real portfolio"}>
         <Row label="Total value" value={inr(d.portfolioValue)} />
         <Row label="Available capital" value={inr(d.availableCapital)} />
         <Row label="Today's P&L" value={inr(d.todayPnl)} tone={pnlTone(d.todayPnl)} />

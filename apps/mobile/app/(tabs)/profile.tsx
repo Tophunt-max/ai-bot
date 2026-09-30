@@ -1,4 +1,5 @@
 import { Link, router } from "expo-router";
+import { AccountSwitcher } from "../../src/components/account";
 import { Button, Card, Screen } from "../../src/components/ui";
 import { useAuth } from "../../src/stores/auth";
 
@@ -8,6 +9,7 @@ export default function Profile() {
   const signOut = useAuth((s) => s.signOut);
   return (
     <Screen title="Profile">
+      <AccountSwitcher />
       <Card title="Risk">
         <Link href="/risk/overview" style={link}>
           Risk overview →

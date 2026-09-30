@@ -71,18 +71,18 @@ function makeEnv(passwordHash: string) {
       }),
     },
     TRADING_ACCOUNT: ns({
-      getState: async () => accountState,
-      setMode: async (mode: string, confirmation?: string) => {
-        checkModeChange("development", accountState as never, mode as never, confirmation);
+      getState: async (_a: string) => accountState,
+      setMode: async (a: string, mode: string, confirmation?: string) => {
+        checkModeChange("development", accountState as never, mode as never, confirmation, a as never);
         accountState.mode = mode;
         return accountState;
       },
-      setKillSwitch: async (active: boolean, trigger: string, reason: string) => {
+      setKillSwitch: async (_a: string, active: boolean, trigger: string, reason: string) => {
         accountState.killSwitch = { active, trigger, reason };
         if (active) accountState.mode = "SAFE_MODE";
         return accountState;
       },
-      acquireLease: async (nodeId: string) => {
+      acquireLease: async (_a: string, nodeId: string) => {
         accountState.lease = { nodeId, expiresAt: Date.now() + 15000 };
         return { granted: true, lease: accountState.lease };
       },
@@ -247,6 +247,7 @@ describe("api", () => {
     const app = createApp();
     const path = "/api/v1/system/gateway/heartbeat";
     const payload = JSON.stringify({
+      account: "real",
       nodeId: "azure-cin-1",
       egressIp: "1.2.3.4",
       egressIpOk: false,
@@ -281,6 +282,28 @@ describe("api", () => {
     expect(b.leaseGranted).toBe(true);
     expect(b.tradingEnabled).toBe(false);
     expect(riskSnap.state.lockReason).toBe("EGRESS_IP_MISMATCH");
+  });
+});
+
+describe("account separation", () => {
+  it("DEMO can never leave virtual money; REAL can never run PAPER", () => {
+    const cur = { mode: "PAPER" as const, killSwitch: { active: false } };
+    expect(() => checkModeChange("production", cur, "CANARY", "ENABLE CANARY", "demo")).toThrow(/DEMO/);
+    expect(() => checkModeChange("production", cur, "LIVE", "ENABLE LIVE", "demo")).toThrow(/DEMO/);
+    expect(() => checkModeChange("production", cur, "PAPER", undefined, "real")).toThrow(/REAL/);
+    expect(() => checkModeChange("production", cur, "SHADOW", undefined, "real")).not.toThrow();
+  });
+
+  it("rejects unknown account headers", async () => {
+    const { env } = makeEnv(hash);
+    const app = createApp();
+    const token = await login(app, env);
+    const r = await app.request(
+      "/api/v1/account",
+      { headers: { Authorization: `Bearer ${token}`, "X-ATB-Account": "other" } },
+      env,
+    );
+    expect(r.status).toBe(400);
   });
 });
 

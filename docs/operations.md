@@ -17,6 +17,13 @@ broker quotes (poll/WS) → 5m candle close → FeatureFrame (causal indicators,
 Paper, canary and live use the **same code path**. Paper sends orders to the paper broker, and
 CANARY/LIVE send them to the real broker. SHADOW simulates fills and never sends an order.
 
+## Demo vs Real
+
+- **Demo Trading** runs continuously on live quotes with virtual money. Use it to watch the strategy behave in today's market without any risk.
+- **Real Trading** is a separate account. It starts in SAFE_MODE, and you promote it SHADOW → CANARY → LIVE yourself.
+- The app talks to one account at a time via the `X-ATB-Account: demo|real` header. The gateway signs `account` inside every control-plane request.
+- A kill switch or loss limit on one account never touches the other.
+
 ## Promotion ladder
 
 Follow these steps in order. Do not skip any of them.

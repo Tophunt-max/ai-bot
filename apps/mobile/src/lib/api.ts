@@ -1,5 +1,6 @@
 import { createApiClient } from "@atb/api-client";
 import Constants from "expo-constants";
+import { useAccount } from "../stores/account";
 import { useAuth } from "../stores/auth";
 
 const baseUrl =
@@ -10,6 +11,7 @@ const baseUrl =
 export const api = createApiClient({
   baseUrl,
   getToken: () => useAuth.getState().token,
+  getAccount: () => useAccount.getState().account,
   onUnauthorized: () => void useAuth.getState().signOut(),
 });
 

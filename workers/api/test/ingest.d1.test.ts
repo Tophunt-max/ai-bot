@@ -48,7 +48,7 @@ const signal = {
 };
 
 const events: IngestEvent[] = [
-  { id: signalRowId(signal.id, "PAPER"), type: "SIGNAL", at: t0, mode: "PAPER", payload: signal },
+  { id: signalRowId("demo", signal.id, "PAPER"), type: "SIGNAL", at: t0, mode: "PAPER", payload: signal },
   {
     id: "ord-1",
     type: "ORDER",
@@ -126,7 +126,7 @@ const events: IngestEvent[] = [
 
 describe("gateway event ingestion (real D1)", () => {
   it("journals signal → order → position → trade → risk event with FKs intact", async () => {
-    const r = await ingestEvents(env, "test-node", events);
+    const r = await ingestEvents(env, "demo", "test-node", events);
     expect(r.inserted).toBe(5);
     expect(r.notifications.map((n) => n.event)).toEqual([
       "NEW_SIGNAL",
@@ -135,31 +135,49 @@ describe("gateway event ingestion (real D1)", () => {
       "KILL_SWITCH",
     ]);
 
-    const trade = await env.DB.prepare("SELECT * FROM trades WHERE id = 'k1'").first<
+    const trade = await env.DB.prepare("SELECT * FROM trades WHERE id = 'demo:k1'").first<
       Record<string, unknown>
     >();
     expect(trade).toMatchObject({
       strategy: "PULLBACK",
       pnl: 104,
       r_multiple: 0.675,
-      signal_id: signalRowId(signal.id, "PAPER"),
-      position_id: "k1",
+      signal_id: signalRowId("demo", signal.id, "PAPER"),
+      position_id: "demo:k1",
       exit_reason: "TP1",
     });
-    const pos = await env.DB.prepare("SELECT status, quantity FROM positions WHERE id = 'k1'").first();
+    const pos = await env.DB.prepare("SELECT status, quantity FROM positions WHERE id = 'demo:k1'").first();
     expect(pos).toEqual({ status: "CLOSED", quantity: 0 });
     const order = await env.DB.prepare(
       "SELECT status, signal_id FROM orders WHERE client_order_id = 'k1_ENTRY'",
     ).first();
-    expect(order).toEqual({ status: "FILLED", signal_id: signalRowId(signal.id, "PAPER") });
+    expect(order).toEqual({ status: "FILLED", signal_id: signalRowId("demo", signal.id, "PAPER") });
   });
 
   it("is idempotent (at-least-once delivery from the gateway)", async () => {
-    const r = await ingestEvents(env, "test-node", events);
+    const r = await ingestEvents(env, "demo", "test-node", events);
     expect(r.inserted).toBe(0);
     expect(r.duplicates).toBe(5);
     const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM trades").first<{ n: number }>();
     expect(n?.n).toBe(1);
+  });
+
+  it("keeps DEMO and REAL books separate (same gateway ids do not collide)", async () => {
+    const r = await ingestEvents(
+      env,
+      "real",
+      "test-node",
+      events.map((e) => ({ ...e, mode: "SHADOW" })),
+    );
+    expect(r.inserted).toBe(5);
+    expect(r.notifications[0]!.message).toContain("REAL");
+    const rows = await env.DB.prepare(
+      "SELECT account_id, COUNT(*) AS n FROM trades GROUP BY account_id ORDER BY account_id",
+    ).all();
+    expect(rows.results).toEqual([
+      { account_id: "demo", n: 1 },
+      { account_id: "real", n: 1 },
+    ]);
   });
 
   it("audit log is append-only", async () => {

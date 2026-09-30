@@ -28,12 +28,14 @@ const schema = z.object({
   /** Read-only market-data source (quotes/history work from any IP). Defaults to ACTIVE_BROKER. */
   DATA_BROKER: z.enum(["none", "zerodha", "upstox", "dhan"]).default("none"),
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
-  PAPER_STARTING_CASH: z.coerce.number().positive().default(1_000_000),
+  /** Virtual capital of the DEMO book (paper broker on live data). */
+  DEMO_STARTING_CASH: z.coerce.number().positive().default(1_000_000),
   INSTRUMENTS_FILE: z.string().optional(),
   TIMEFRAME: z.enum(TIMEFRAMES).default("5m"),
   PRODUCT: z.enum(PRODUCT_TYPES).default("INTRADAY"),
   MARGIN_FRACTION: z.coerce.number().gt(0).max(1).default(0.2),
-  STATE_FILE: z.string().default("/app/state/engine.json"),
+  /** Crash-safe engine state per book: engine-demo.json / engine-real.json. */
+  STATE_DIR: z.string().default("/app/state"),
   CANARY_CAPITAL_PCT: z.coerce.number().gt(0).max(100).default(5),
   AI_ENABLED: bool,
   AI_SERVICE_URL: z.string().default("http://ai-service:8000"),
@@ -54,7 +56,7 @@ export function loadInstruments(file?: string): Instrument[] {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
-  const cfg = schema.parse(env);
+  const cfg = schema.parse({ ...env, DEMO_STARTING_CASH: env.DEMO_STARTING_CASH ?? env.PAPER_STARTING_CASH });
   if (cfg.ACTIVE_BROKER !== "paper" && cfg.WHITELISTED_EGRESS_IPS.length === 0) {
     throw new Error("WHITELISTED_EGRESS_IPS is required when ACTIVE_BROKER is a real broker");
   }

@@ -2,6 +2,7 @@ import { Redirect, Tabs } from "expo-router";
 import { Text, type ColorValue } from "react-native";
 import { colors } from "../../src/components/ui";
 import { useRealtime } from "../../src/lib/realtime";
+import { ACCOUNT_THEME, useAccount } from "../../src/stores/account";
 import { useAuth } from "../../src/stores/auth";
 
 const icon =
@@ -10,6 +11,7 @@ const icon =
 
 export default function TabsLayout() {
   const token = useAuth((s) => s.token);
+  const account = useAccount((s) => s.account);
   useRealtime();
   if (!token) return <Redirect href="/(auth)/login" />;
 
@@ -17,8 +19,12 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
-        tabBarActiveTintColor: colors.blue,
+        tabBarStyle: {
+          backgroundColor: colors.card,
+          borderTopColor: ACCOUNT_THEME[account].color,
+          borderTopWidth: 2,
+        },
+        tabBarActiveTintColor: ACCOUNT_THEME[account].color,
         tabBarInactiveTintColor: colors.muted,
       }}
     >

@@ -54,5 +54,5 @@ export interface AuthUser {
 
 export type AppBindings = { Bindings: Env; Variables: { user: AuthUser; requestId: string } };
 
-/** Personal use: exactly one trading account DO instance per broker account label. */
-export const OWNER_ACCOUNT = "owner-primary";
+/** Personal use: two books — "demo" (virtual money, live data) and "real" (real money). */
+export { ACCOUNT_IDS } from "@atb/shared-types";

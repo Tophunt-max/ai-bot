@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   ApiError,
   DashboardSummary,
   KillSwitchTrigger,
@@ -9,6 +10,7 @@ import type {
 } from "@atb/shared-types";
 
 export interface AccountState {
+  account?: AccountId;
   mode: TradingMode;
   status: string;
   tradingEnabled: boolean;
@@ -77,6 +79,8 @@ export class ApiClientError extends Error {
 export interface ApiClientOptions {
   baseUrl: string;
   getToken: () => Promise<string | null> | string | null;
+  /** Which book every request targets: "demo" (virtual money) or "real" (real money). */
+  getAccount?: () => AccountId;
   onUnauthorized?: () => void;
   fetch?: typeof fetch;
 }
@@ -87,7 +91,10 @@ export function createApiClient(opts: ApiClientOptions) {
   const base = opts.baseUrl.replace(/\/$/, "");
 
   async function call<T>(method: string, path: string, body?: unknown, auth = true): Promise<T> {
-    const headers: Record<string, string> = { Accept: "application/json" };
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "X-ATB-Account": opts.getAccount?.() ?? "demo",
+    };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (auth) {
       const token = await opts.getToken();
@@ -147,8 +154,8 @@ export function createApiClient(opts: ApiClientOptions) {
     killSwitch: (active: boolean, reason: string, trigger: KillSwitchTrigger = "MANUAL") =>
       call<AccountState>("POST", "/admin/kill-switch", { active, reason, trigger }),
     auditLogs: () => call<Array<Record<string, unknown>>>("GET", "/admin/audit-logs"),
-    realtimeUrl: (token: string) =>
-      `${base.replace(/^http/, "ws")}/api/v1/system/realtime?token=${encodeURIComponent(token)}`,
+    realtimeUrl: (token: string, account: AccountId = opts.getAccount?.() ?? "demo") =>
+      `${base.replace(/^http/, "ws")}/api/v1/system/realtime?token=${encodeURIComponent(token)}&account=${account}`,
   };
 }
 

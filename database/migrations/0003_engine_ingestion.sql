@@ -1,9 +1,13 @@
--- Owner + primary account (personal use) so gateway events can be journaled with FKs intact.
+-- Owner + accounts (personal use) so gateway events can be journaled with FKs intact.
 INSERT OR IGNORE INTO users (id, email, role, mfa_enabled, status, created_at, updated_at)
 VALUES ('owner', 'owner@local', 'OWNER', 0, 'ACTIVE', 0, 0);
 
+-- Two separate books: DEMO = virtual money on real live market data; REAL = real money via the broker
+-- configured on the execution gateway (ACTIVE_BROKER). They never share positions, risk or journals.
 INSERT OR IGNORE INTO accounts (id, user_id, broker_id, broker_client_id, label, trading_mode, status, created_at, updated_at)
-VALUES ('owner-primary', 'owner', 'paper', NULL, 'Primary', 'PAPER', 'ACTIVE', 0, 0);
+VALUES ('demo', 'owner', 'paper', NULL, 'Demo (virtual money, live data)', 'PAPER', 'ACTIVE', 0, 0);
+INSERT OR IGNORE INTO accounts (id, user_id, broker_id, broker_client_id, label, trading_mode, status, created_at, updated_at)
+VALUES ('real', 'owner', 'zerodha', NULL, 'Real money (broker = gateway ACTIVE_BROKER)', 'SAFE_MODE', 'ACTIVE', 0, 0);
 
 -- Human-readable model version string on journal rows (model_version_id stays the registry FK).
 ALTER TABLE signals ADD COLUMN model_version TEXT;

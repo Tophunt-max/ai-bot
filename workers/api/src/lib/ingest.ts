@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { OWNER_ACCOUNT } from "../env";
+import type { AccountId } from "@atb/shared-types";
 
 export interface IngestEvent {
   id: string;
@@ -30,7 +30,8 @@ function instrumentUpsert(env: Env, instrumentId: string, now: number) {
 }
 
 /** Signal row id: must match what TRADE/ORDER events reference (gateway uses `sig-<signalId>-<mode>`). */
-export const signalRowId = (signalId: string, mode: string) => `sig-${signalId}-${mode}`;
+export const signalRowId = (account: AccountId, signalId: string, mode: string) =>
+  `${account}:sig-${signalId}-${mode}`;
 
 /**
  * Idempotent ingestion of gateway events into D1 (journal) + notification fan-out.
@@ -38,6 +39,7 @@ export const signalRowId = (signalId: string, mode: string) => `sig-${signalId}-
  */
 export async function ingestEvents(
   env: Env,
+  account: AccountId,
   nodeId: string,
   events: IngestEvent[],
 ): Promise<{
@@ -52,7 +54,9 @@ export async function ingestEvents(
   const notifications: Notification[] = [];
   let latestPositions: IngestEvent | undefined;
 
-  for (const e of events) {
+  for (const raw of events) {
+    // Event ids are namespaced per account so the demo and real books can never collide.
+    const e = { ...raw, id: raw.id.startsWith(`${account}:`) ? raw.id : `${account}:${raw.id}` };
     const claim = await env.DB.prepare(
       "INSERT OR IGNORE INTO ingested_events (id, node_id, type, at, received_at) VALUES (?, ?, ?, ?, ?)",
     )
@@ -78,7 +82,7 @@ export async function ingestEvents(
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).bind(
             e.id,
-            OWNER_ACCOUNT,
+            account,
             instrumentId,
             str(p.decision, "NO_TRADE"),
             str(p.regime, "UNKNOWN"),
@@ -124,8 +128,8 @@ export async function ingestEvents(
           ).bind(
             e.id,
             str(p.clientOrderId, e.id),
-            OWNER_ACCOUNT,
-            signalRowId(str(p.signalId), e.mode),
+            account,
+            signalRowId(account, str(p.signalId), e.mode),
             instrumentId,
             str(p.leg, "ENTRY"),
             str(p.side, "BUY"),
@@ -159,8 +163,8 @@ export async function ingestEvents(
                realised_pnl, status, mode, opened_at, updated_at)
              VALUES (?, ?, ?, 'INTRADAY', ?, ?, ?, ?, 0, 'OPEN', ?, ?, ?)`,
           ).bind(
-            str(p.key, e.id),
-            OWNER_ACCOUNT,
+            `${account}:${str(p.key, e.id)}`,
+            account,
             instrumentId,
             p.side === "SELL" ? -qty : qty,
             num(p.entry),
@@ -188,10 +192,10 @@ export async function ingestEvents(
                mfe, mae, holding_time_ms, model_version, exit_reason, mode, opened_at, closed_at)
              VALUES (?, ?, (SELECT id FROM positions WHERE id = ?), (SELECT id FROM signals WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).bind(
-            str(p.key, e.id),
-            OWNER_ACCOUNT,
-            str(p.key),
-            signalRowId(str(p.signalId), e.mode),
+            `${account}:${str(p.key, e.id)}`,
+            account,
+            `${account}:${str(p.key)}`,
+            signalRowId(account, str(p.signalId), e.mode),
             instrumentId,
             str(p.strategy),
             str(p.regime),
@@ -221,7 +225,7 @@ export async function ingestEvents(
         stmts.push(
           env.DB.prepare(
             "UPDATE positions SET status='CLOSED', quantity=0, realised_pnl=?, closed_at=?, updated_at=? WHERE id=?",
-          ).bind(num(p.pnl), e.at, e.at, str(p.key)),
+          ).bind(num(p.pnl), e.at, e.at, `${account}:${str(p.key)}`),
         );
         const reason = str(p.exitReason);
         const ev = reason.includes("STOP") ? "SL_HIT" : reason.startsWith("TP") ? "TP_HIT" : "TRADE_CLOSED";
@@ -237,15 +241,7 @@ export async function ingestEvents(
         stmts.push(
           env.DB.prepare(
             "INSERT OR IGNORE INTO risk_events (id, account_id, type, trigger, severity, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          ).bind(
-            e.id,
-            OWNER_ACCOUNT,
-            str(p.type, "EVENT"),
-            (p.trigger as string) ?? null,
-            sev,
-            json(p),
-            e.at,
-          ),
+          ).bind(e.id, account, str(p.type, "EVENT"), (p.trigger as string) ?? null, sev, json(p), e.at),
         );
         const type = str(p.type);
         const event =
@@ -264,5 +260,7 @@ export async function ingestEvents(
     }
     if (stmts.length) await env.DB.batch(stmts);
   }
+  const tag = account === "real" ? "💰 REAL" : "🧪 DEMO";
+  for (const n of notifications) n.message = `[${tag}] ${n.message}`;
   return { inserted, duplicates, notifications, latestPositions };
 }

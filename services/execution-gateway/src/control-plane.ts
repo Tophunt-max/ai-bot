@@ -1,5 +1,5 @@
 import type { FetchLike } from "@atb/brokers";
-import type { KillSwitchTrigger, RiskLimits, TradingMode } from "@atb/shared-types";
+import type { AccountId, KillSwitchTrigger, RiskLimits, TradingMode } from "@atb/shared-types";
 import { signRequest } from "@atb/trading-core";
 
 export interface HeartbeatRequest {
@@ -45,16 +45,20 @@ export interface ControlPlane {
   killSwitch?(trigger: KillSwitchTrigger, reason: string): Promise<void>;
 }
 
-/** Signed client for the Cloudflare Worker gateway endpoints. */
+/**
+ * Signed client for the Cloudflare Worker gateway endpoints. One instance per account
+ * ("demo" / "real"); the account is part of the SIGNED body so it cannot be swapped in transit.
+ */
 export class HttpControlPlane implements ControlPlane {
   constructor(
     private readonly baseUrl: string,
     private readonly secret: string,
+    readonly account: AccountId,
     private readonly fetchFn: FetchLike = fetch,
   ) {}
 
-  private async post<T>(path: string, payload: unknown): Promise<T> {
-    const body = JSON.stringify(payload);
+  private async post<T>(path: string, payload: object): Promise<T> {
+    const body = JSON.stringify({ ...payload, account: this.account });
     const fullPath = `/api/v1/system/gateway${path}`;
     const headers = await signRequest(this.secret, "POST", fullPath, body);
     const res = await this.fetchFn(`${this.baseUrl.replace(/\/$/, "")}${fullPath}`, {

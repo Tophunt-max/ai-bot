@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { BannerSlot } from "./banner-slot";
 
 export const colors = {
   bg: "#0b0f14",
@@ -19,10 +20,19 @@ export const inr = (n: number | undefined | null) =>
     ? "—"
     : `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
-export function Screen({ children, title }: { children: ReactNode; title?: string }) {
+export function Screen({
+  children,
+  title,
+  banner = true,
+}: {
+  children: ReactNode;
+  title?: string;
+  banner?: boolean;
+}) {
   return (
     <SafeAreaView style={s.screen} edges={["top", "left", "right"]}>
       <ScrollView contentContainerStyle={s.scroll}>
+        {banner ? <BannerSlot /> : null}
         {title ? <Text style={s.title}>{title}</Text> : null}
         {children}
       </ScrollView>

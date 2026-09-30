@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ACCOUNT_IDS,
   BROKER_IDS,
   EXCHANGES,
   INSTRUMENT_TYPES,
@@ -72,6 +73,8 @@ export const loginSchema = z.object({
     .regex(/^\d{6}$/)
     .optional(),
 });
+
+export const accountIdSchema = z.enum(ACCOUNT_IDS);
 
 export const modeChangeSchema = z.object({
   mode: z.enum(TRADING_MODES),

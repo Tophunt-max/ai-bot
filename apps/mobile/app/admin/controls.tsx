@@ -1,14 +1,15 @@
-import type { TradingMode } from "@atb/shared-types";
+import { ACCOUNT_ALLOWED_MODES, type TradingMode } from "@atb/shared-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { TextInput } from "react-native";
 import { Button, Card, ErrorText, Muted, Row, Screen, colors, s } from "../../src/components/ui";
 import { api, qk } from "../../src/lib/api";
-
-const MODES: TradingMode[] = ["PAPER", "SHADOW", "CANARY", "LIVE", "SAFE_MODE"];
+import { useAccount } from "../../src/stores/account";
 
 export default function Controls() {
   const qc = useQueryClient();
+  const account = useAccount((s) => s.account);
+  const MODES = ACCOUNT_ALLOWED_MODES[account];
   const acc = useQuery({ queryKey: qk.account, queryFn: api.account });
   const [confirmation, setConfirmation] = useState("");
   const invalidate = () => {
@@ -47,7 +48,9 @@ export default function Controls() {
       </Card>
       <Card title="Mode">
         <Muted>
-          CANARY / LIVE require typing “ENABLE CANARY” or “ENABLE LIVE”. LIVE is only reachable from CANARY.
+          {account === "demo"
+            ? "DEMO account: always virtual money (PAPER). It can never send orders to your real broker."
+            : "REAL account: SHADOW (no orders) → CANARY (small real size) → LIVE. CANARY/LIVE need the typed confirmation “ENABLE CANARY” / “ENABLE LIVE”; LIVE only from CANARY."}
         </Muted>
         <TextInput
           style={s.input}

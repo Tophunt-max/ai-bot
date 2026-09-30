@@ -153,9 +153,9 @@ describe("gateway HTTP", () => {
   it("requires HMAC for order submission; health is open", async () => {
     const { ex } = setup();
     await ex.heartbeat();
-    const app = createGatewayApp(ex, "s".repeat(32));
+    const app = createGatewayApp({ demo: { executor: ex } }, "s".repeat(32));
     expect((await app.request("/health")).status).toBe(200);
-    const body = JSON.stringify(order());
+    const body = JSON.stringify({ account: "demo", order: order() });
     expect((await app.request("/v1/orders", { method: "POST", body })).status).toBe(401);
     const headers = await signRequest("s".repeat(32), "POST", "/v1/orders", body);
     const r = await app.request("/v1/orders", {
@@ -164,5 +164,14 @@ describe("gateway HTTP", () => {
       headers: { ...headers, "Content-Type": "application/json" },
     });
     expect(r.status).toBe(200);
+    // REAL book not running on this gateway → rejected (never falls back to another book)
+    const realBody = JSON.stringify({ account: "real", order: order("sigREAL0001_ENTRY") });
+    const h2 = await signRequest("s".repeat(32), "POST", "/v1/orders", realBody);
+    const r2 = await app.request("/v1/orders", {
+      method: "POST",
+      body: realBody,
+      headers: { ...h2, "Content-Type": "application/json" },
+    });
+    expect(r2.status).toBe(409);
   });
 });

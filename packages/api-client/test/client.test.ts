@@ -7,6 +7,7 @@ describe("api client", () => {
     const api = createApiClient({
       baseUrl: "https://api.x/",
       getToken: () => "tok",
+      getAccount: () => "real",
       fetch: fetchMock as never,
     });
     const r = await api.account();
@@ -14,6 +15,7 @@ describe("api client", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://api.x/api/v1/account");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok");
+    expect((init.headers as Record<string, string>)["X-ATB-Account"]).toBe("real");
   });
 
   it("maps structured errors and calls onUnauthorized on 401", async () => {
@@ -34,6 +36,7 @@ describe("api client", () => {
 
   it("builds a wss realtime url", () => {
     const api = createApiClient({ baseUrl: "https://api.x", getToken: () => null });
-    expect(api.realtimeUrl("a b")).toBe("wss://api.x/api/v1/system/realtime?token=a%20b");
+    expect(api.realtimeUrl("a b")).toBe("wss://api.x/api/v1/system/realtime?token=a%20b&account=demo");
+    expect(api.realtimeUrl("t", "real")).toContain("account=real");
   });
 });

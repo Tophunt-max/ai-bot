@@ -17,6 +17,29 @@ export const ALLOWED_MODES: Record<Environment, readonly TradingMode[]> = {
   production: ["BACKTEST", "PAPER", "SHADOW", "CANARY", "LIVE", "SAFE_MODE"],
 };
 
+// ---------------------------------------------------------------- accounts
+/**
+ * Two completely separate books:
+ *  - demo: VIRTUAL money on REAL live market data (paper broker). Can never reach a real broker.
+ *  - real: REAL money through the real broker (SHADOW first, then CANARY, then LIVE).
+ */
+export const ACCOUNT_IDS = ["demo", "real"] as const;
+export type AccountId = (typeof ACCOUNT_IDS)[number];
+
+export const ACCOUNT_ALLOWED_MODES: Record<AccountId, readonly TradingMode[]> = {
+  demo: ["PAPER", "SAFE_MODE"],
+  real: ["SHADOW", "CANARY", "LIVE", "SAFE_MODE"],
+};
+
+export const DEFAULT_ACCOUNT_MODE: Record<AccountId, TradingMode> = {
+  demo: "PAPER",
+  real: "SAFE_MODE",
+};
+
+export function isAccountId(x: unknown): x is AccountId {
+  return x === "demo" || x === "real";
+}
+
 // ---------------------------------------------------------------- market
 export const EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"] as const;
 export type Exchange = (typeof EXCHANGES)[number];

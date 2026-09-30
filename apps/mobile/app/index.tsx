@@ -6,7 +6,7 @@ export default function Index() {
   const { token, hydrated } = useAuth();
   if (!hydrated)
     return (
-      <Screen>
+      <Screen banner={false}>
         <Loading />
       </Screen>
     );

@@ -6,6 +6,28 @@ A personal, risk-first autonomous trading platform for Indian markets (NSE/BSE, 
 > defaults to **blocking new trades** whenever anything is uncertain: stale data, the AI or broker
 > being down, an unknown order state, or an egress IP mismatch.
 
+## Two accounts: Demo Trading and Real Trading
+
+|               | 🧪 **Demo Trading**                              | 💰 **Real Trading**                                 |
+| ------------- | ------------------------------------------------ | --------------------------------------------------- |
+| Money         | Virtual (`DEMO_STARTING_CASH`, default ₹10 lakh) | Your real broker funds                              |
+| Market data   | **Real live quotes** (same feed as Real)         | Real live quotes                                    |
+| Orders go to  | Built-in paper broker (never the real broker)    | Broker set by `ACTIVE_BROKER` (Zerodha/Upstox/Dhan) |
+| Allowed modes | PAPER (+ SAFE_MODE)                              | SHADOW → CANARY → LIVE (+ SAFE_MODE)                |
+| Starts in     | PAPER                                            | SAFE_MODE (you move it to SHADOW deliberately)      |
+
+The two books share nothing except the price feed. Each one has its own:
+
+- positions, orders and journal
+- risk limits and drawdown
+- kill switch and execution lease
+- gateway engine and state file
+
+The app has a **Demo | Real** switch on the Dashboard and Profile screens. Every screen shows a
+coloured banner (blue = DEMO, red = REAL MONEY), and switching to Real asks for confirmation.
+Alerts are tagged 🧪 DEMO or 💰 REAL. If `ACTIVE_BROKER=paper`, the Real book is not started at
+all.
+
 ## Architecture
 
 ```text

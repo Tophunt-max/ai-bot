@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { useAccount } from "../stores/account";
 import { useAuth } from "../stores/auth";
 import { api, qk } from "./api";
 
@@ -17,6 +18,7 @@ const TOPIC_TO_QUERY: Record<string, readonly (readonly string[])[]> = {
 /** Single WebSocket subscription; pushes invalidate React Query caches (no aggressive polling). */
 export function useRealtime(): Status {
   const token = useAuth((s) => s.token);
+  const account = useAccount((s) => s.account);
   const qc = useQueryClient();
   const [status, setStatus] = useState<Status>("closed");
   const retry = useRef(0);
@@ -29,7 +31,7 @@ export function useRealtime(): Status {
 
     const connect = () => {
       setStatus("connecting");
-      ws = new WebSocket(api.realtimeUrl(token));
+      ws = new WebSocket(api.realtimeUrl(token, account));
       ws.onopen = () => {
         retry.current = 0;
         setStatus("open");
@@ -55,7 +57,7 @@ export function useRealtime(): Status {
       if (timer) clearTimeout(timer);
       ws?.close();
     };
-  }, [token, qc]);
+  }, [token, account, qc]);
 
   return status;
 }

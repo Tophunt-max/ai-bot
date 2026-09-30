@@ -8,11 +8,16 @@ import { listBrokers } from "@atb/brokers";
 import {
   KILL_SWITCH_TRIGGERS,
   MODEL_STATUSES,
+  isAccountId,
+  type AccountId,
   type DashboardSummary,
+  type KillSwitchTrigger,
   type ModelStatus,
+  type TradingMode,
 } from "@atb/shared-types";
 import { DEFAULT_SESSION, evaluateTrade, sessionPhase, canOpenNewPosition } from "@atb/trading-core";
 import {
+  accountIdSchema,
   instrumentSchema,
   killSwitchSchema,
   loginSchema,
@@ -20,7 +25,7 @@ import {
   riskLimitsSchema,
   z,
 } from "@atb/validation";
-import { OWNER_ACCOUNT, type AppBindings, type Env } from "./env";
+import { type AppBindings, type Env } from "./env";
 import type { EngineSnapshot } from "./do/position-manager";
 import { audit } from "./lib/audit";
 import { ingestEvents } from "./lib/ingest";
@@ -39,11 +44,36 @@ import {
 
 const TOKEN_TTL_S = 12 * 60 * 60;
 
-const account = (env: Env) => env.TRADING_ACCOUNT.get(env.TRADING_ACCOUNT.idFromName(OWNER_ACCOUNT));
-const risk = (env: Env) => env.RISK_MANAGER.get(env.RISK_MANAGER.idFromName(OWNER_ACCOUNT));
-const positions = (env: Env) => env.POSITION_MANAGER.get(env.POSITION_MANAGER.idFromName(OWNER_ACCOUNT));
-const orders = (env: Env) => env.ORDER_MANAGER.get(env.ORDER_MANAGER.idFromName(OWNER_ACCOUNT));
-const realtime = (env: Env) => env.REALTIME.get(env.REALTIME.idFromName(OWNER_ACCOUNT));
+/** Every Durable Object is per account: "demo" (virtual money) and "real" (real money) never share state. */
+export const account = (env: Env, id: AccountId) => {
+  const st = env.TRADING_ACCOUNT.get(env.TRADING_ACCOUNT.idFromName(id));
+  return {
+    getState: () => st.getState(id),
+    setMode: async (to: TradingMode, confirmation?: string) =>
+      unwrapRejection(await st.setMode(id, to, confirmation)),
+    setTradingEnabled: async (enabled: boolean) => unwrapRejection(await st.setTradingEnabled(id, enabled)),
+    setKillSwitch: (active: boolean, trigger: KillSwitchTrigger, reason: string) =>
+      st.setKillSwitch(id, active, trigger, reason),
+    acquireLease: (nodeId: string, ttlMs?: number) => st.acquireLease(id, nodeId, ttlMs),
+  };
+};
+const risk = (env: Env, id: AccountId) => env.RISK_MANAGER.get(env.RISK_MANAGER.idFromName(id));
+const positions = (env: Env, id: AccountId) => env.POSITION_MANAGER.get(env.POSITION_MANAGER.idFromName(id));
+const orders = (env: Env, id: AccountId) => env.ORDER_MANAGER.get(env.ORDER_MANAGER.idFromName(id));
+const realtime = (env: Env, id: AccountId) => env.REALTIME.get(env.REALTIME.idFromName(id));
+
+/** DO methods return `{ rejected }` for policy violations; re-throw locally as ModeChangeError (→ 409). */
+function unwrapRejection<T extends object>(r: T): Exclude<T, { rejected: string }> {
+  if ("rejected" in r && typeof r.rejected === "string") throw new ModeChangeError(r.rejected);
+  return r as Exclude<T, { rejected: string }>;
+}
+
+/** Account for user requests: `X-ATB-Account` header (or ?account=), default demo. */
+function acct(c: Context<AppBindings>): AccountId {
+  const v = c.req.header("X-ATB-Account") ?? c.req.query("account") ?? "demo";
+  if (!isAccountId(v)) throw new HTTPException(400, { message: "account must be demo or real" });
+  return v;
+}
 
 async function body<S extends z.ZodType>(c: Context<AppBindings>, schema: S): Promise<z.infer<S>> {
   let raw: unknown;
@@ -133,7 +163,7 @@ export function createApp() {
   v1.get("/system/realtime", async (c) => {
     const user = await verifyUserToken(c.req.query("token") ?? "", c.env.JWT_SECRET);
     if (!user) return apiError(c, 401, "UNAUTHENTICATED", "token required");
-    return realtime(c.env).fetch(c.req.raw);
+    return realtime(c.env, acct(c)).fetch(c.req.raw);
   });
 
   // ------------------------------------------------------------ gateway (HMAC)
@@ -144,6 +174,7 @@ export function createApp() {
     const hb = await body(
       c,
       z.object({
+        account: accountIdSchema,
         nodeId: z.string().min(3).max(40),
         egressIp: z.string().max(64),
         egressIpOk: z.boolean(),
@@ -152,16 +183,16 @@ export function createApp() {
       }),
     );
     // Egress IP only matters for real-broker orders (CANARY/LIVE); PAPER/SHADOW never reach a broker.
-    const modeNow = (await account(c.env).getState()).mode;
+    const modeNow = (await account(c.env, hb.account).getState()).mode;
     if (!hb.egressIpOk && (modeNow === "CANARY" || modeNow === "LIVE"))
-      await risk(c.env).lock("EGRESS_IP_MISMATCH");
-    if (!hb.brokerSessionValid) await risk(c.env).lock("BROKER_SESSION_EXPIRED");
-    await c.env.CACHE?.put("gateway-health", JSON.stringify({ ...hb, at: Date.now() }), {
+      await risk(c.env, hb.account).lock("EGRESS_IP_MISMATCH");
+    if (!hb.brokerSessionValid) await risk(c.env, hb.account).lock("BROKER_SESSION_EXPIRED");
+    await c.env.CACHE?.put(`gateway-health:${hb.account}`, JSON.stringify({ ...hb, at: Date.now() }), {
       expirationTtl: 300,
     });
-    const lease = await account(c.env).acquireLease(hb.nodeId);
-    const state = await account(c.env).getState();
-    const rs = await risk(c.env).getSnapshot();
+    const lease = await account(c.env, hb.account).acquireLease(hb.nodeId);
+    const state = await account(c.env, hb.account).getState();
+    const rs = await risk(c.env, hb.account).getSnapshot();
     return c.json({
       leaseGranted: lease.granted,
       leaseHolder: lease.lease?.nodeId,
@@ -173,9 +204,10 @@ export function createApp() {
   });
 
   gw.post("/reconciliation", async (c) => {
-    const snap = await body(
+    const { account: a, ...snap } = await body(
       c,
       z.object({
+        account: accountIdSchema,
         equity: z.number().nonnegative(),
         dailyRealisedPnl: z.number(),
         weeklyRealisedPnl: z.number(),
@@ -183,8 +215,8 @@ export function createApp() {
         openPositions: z.number().int().nonnegative(),
       }),
     );
-    const r = await risk(c.env).applyReconciliation(snap);
-    await realtime(c.env).broadcast("risk", r.state);
+    const r = await risk(c.env, a).applyReconciliation(snap);
+    await realtime(c.env, a).broadcast("risk", r.state);
     const eq = r.state.equity;
     const lossPct = eq > 0 ? (Math.max(0, -r.state.dailyRealisedPnl) / eq) * 100 : 0;
     const ddPct = r.state.peakEquity > 0 ? ((r.state.peakEquity - eq) / r.state.peakEquity) * 100 : 0;
@@ -192,15 +224,15 @@ export function createApp() {
     if (lossPct >= 0.75 * r.limits.maxDailyLossPct) {
       await notify(c.env, {
         event: "DAILY_LOSS_WARNING",
-        message: `Daily loss ${lossPct.toFixed(2)}% of equity (limit ${r.limits.maxDailyLossPct}%)`,
-        dedupeKey: `dlw-${day}`,
+        message: `[${a.toUpperCase()}] Daily loss ${lossPct.toFixed(2)}% of equity (limit ${r.limits.maxDailyLossPct}%)`,
+        dedupeKey: `dlw-${a}-${day}`,
       });
     }
     if (ddPct >= 0.75 * r.limits.maxDrawdownPct) {
       await notify(c.env, {
         event: "DRAWDOWN_WARNING",
-        message: `Drawdown ${ddPct.toFixed(2)}% (limit ${r.limits.maxDrawdownPct}%)`,
-        dedupeKey: `ddw-${day}`,
+        message: `[${a.toUpperCase()}] Drawdown ${ddPct.toFixed(2)}% (limit ${r.limits.maxDrawdownPct}%)`,
+        dedupeKey: `ddw-${a}-${day}`,
       });
     }
     return c.json(r.state);
@@ -210,6 +242,7 @@ export function createApp() {
     const input = await body(
       c,
       z.object({
+        account: accountIdSchema,
         nodeId: z.string().min(3).max(40),
         events: z
           .array(
@@ -224,22 +257,22 @@ export function createApp() {
           .max(200),
       }),
     );
-    const res = await ingestEvents(c.env, input.nodeId, input.events);
+    const res = await ingestEvents(c.env, input.account, input.nodeId, input.events);
     for (const n of res.notifications) await notify(c.env, n);
     if (res.latestPositions) {
       const p = res.latestPositions.payload as unknown as Omit<EngineSnapshot, "at" | "mode">;
-      await positions(c.env).setSnapshot({
+      await positions(c.env, input.account).setSnapshot({
         ...p,
         at: res.latestPositions.at,
         mode: res.latestPositions.mode,
       });
-      await realtime(c.env).broadcast("position", p.positions);
-      await realtime(c.env).broadcast("pnl", { equity: p.equity, dailyPnl: p.dailyPnl });
+      await realtime(c.env, input.account).broadcast("position", p.positions);
+      await realtime(c.env, input.account).broadcast("pnl", { equity: p.equity, dailyPnl: p.dailyPnl });
     }
     for (const e of input.events) {
-      if (e.type === "SIGNAL") await realtime(c.env).broadcast("signal", e.payload);
+      if (e.type === "SIGNAL") await realtime(c.env, input.account).broadcast("signal", e.payload);
       if (e.type === "ORDER" || e.type === "TRADE_OPENED" || e.type === "TRADE_CLOSED")
-        await realtime(c.env).broadcast("order", { type: e.type, ...e.payload });
+        await realtime(c.env, input.account).broadcast("order", { type: e.type, ...e.payload });
     }
     return c.json({ inserted: res.inserted, duplicates: res.duplicates });
   });
@@ -248,11 +281,15 @@ export function createApp() {
   gw.post("/kill-switch", async (c) => {
     const input = await body(
       c,
-      z.object({ trigger: z.enum(KILL_SWITCH_TRIGGERS), reason: z.string().min(3).max(500) }),
+      z.object({
+        account: accountIdSchema,
+        trigger: z.enum(KILL_SWITCH_TRIGGERS),
+        reason: z.string().min(3).max(500),
+      }),
     );
-    const before = await account(c.env).getState();
-    const after = await account(c.env).setKillSwitch(true, input.trigger, input.reason);
-    await risk(c.env).lock(input.trigger);
+    const before = await account(c.env, input.account).getState();
+    const after = await account(c.env, input.account).setKillSwitch(true, input.trigger, input.reason);
+    await risk(c.env, input.account).lock(input.trigger);
     await audit(c.env, {
       actor: "gateway",
       action: "kill_switch.auto_activate",
@@ -263,11 +300,11 @@ export function createApp() {
     if (!before.killSwitch.active) {
       await notify(c.env, {
         event: "KILL_SWITCH",
-        message: `AUTO kill switch: ${input.trigger} — ${input.reason}`,
+        message: `[${input.account.toUpperCase()}] AUTO kill switch: ${input.trigger} — ${input.reason}`,
         dedupeKey: `ks-${input.trigger}-${Math.floor(Date.now() / 600_000)}`,
       });
     }
-    await realtime(c.env).broadcast("alert", { type: "KILL_SWITCH", ...input });
+    await realtime(c.env, input.account).broadcast("alert", { type: "KILL_SWITCH", ...input });
     return c.json(after);
   });
 
@@ -283,7 +320,7 @@ export function createApp() {
 
   authed.get("/auth/me", (c) => c.json(c.get("user")));
 
-  authed.get("/account", async (c) => c.json(await account(c.env).getState()));
+  authed.get("/account", async (c) => c.json(await account(c.env, acct(c)).getState()));
 
   authed.put(
     "/account/mode",
@@ -291,12 +328,12 @@ export function createApp() {
     rateLimit((c) => c.env.TRADING_RATE_LIMITER),
     async (c) => {
       const input = await body(c, modeChangeSchema);
-      const before = await account(c.env).getState();
-      const after = await account(c.env).setMode(input.mode, input.confirmation);
+      const before = await account(c.env, acct(c)).getState();
+      const after = await account(c.env, acct(c)).setMode(input.mode, input.confirmation);
       await audit(c.env, {
         actor: actorOf(c),
         action: "account.mode_change",
-        target: OWNER_ACCOUNT,
+        target: acct(c),
         before: { mode: before.mode },
         after: { mode: after.mode, reason: input.reason },
         requestId: c.get("requestId"),
@@ -312,7 +349,7 @@ export function createApp() {
     rateLimit((c) => c.env.TRADING_RATE_LIMITER),
     async (c) => {
       const input = await body(c, z.object({ enabled: z.boolean(), reason: z.string().min(3).max(500) }));
-      const after = await account(c.env).setTradingEnabled(input.enabled);
+      const after = await account(c.env, acct(c)).setTradingEnabled(input.enabled);
       await audit(c.env, {
         actor: actorOf(c),
         action: input.enabled ? "trading.enable" : "trading.disable",
@@ -326,17 +363,19 @@ export function createApp() {
 
   authed.get("/portfolio", async (c) => {
     const [acc, rs, pos, snap, totals, lastSig, gwHealth] = await Promise.all([
-      account(c.env).getState(),
-      risk(c.env).getSnapshot(),
-      positions(c.env).list(),
-      positions(c.env).getSnapshot(),
-      c.env.DB.prepare("SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades WHERE mode = ?")
-        .bind((await account(c.env).getState()).mode)
+      account(c.env, acct(c)).getState(),
+      risk(c.env, acct(c)).getSnapshot(),
+      positions(c.env, acct(c)).list(),
+      positions(c.env, acct(c)).getSnapshot(),
+      c.env.DB.prepare("SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades WHERE account_id = ?")
+        .bind((await account(c.env, acct(c)).getState()).mode)
         .first<{ pnl: number }>(),
-      c.env.DB.prepare("SELECT regime FROM signals ORDER BY created_at DESC LIMIT 1").first<{
-        regime: string;
-      }>(),
-      c.env.CACHE?.get("gateway-health", "json") as
+      c.env.DB.prepare("SELECT regime FROM signals WHERE account_id = ? ORDER BY created_at DESC LIMIT 1")
+        .bind(acct(c))
+        .first<{
+          regime: string;
+        }>(),
+      c.env.CACHE?.get(`gateway-health:${acct(c)}`, "json") as
         Promise<{ brokerSessionValid?: boolean; egressIpOk?: boolean; at?: number } | null> | undefined,
     ]);
     const st = rs.state;
@@ -377,8 +416,8 @@ export function createApp() {
     return c.json(summary);
   });
 
-  authed.get("/positions", async (c) => c.json(await positions(c.env).list()));
-  authed.get("/orders", async (c) => c.json(await orders(c.env).listOpen()));
+  authed.get("/positions", async (c) => c.json(await positions(c.env, acct(c)).list()));
+  authed.get("/orders", async (c) => c.json(await orders(c.env, acct(c)).listOpen()));
 
   /** Dry-run the deterministic risk gateway against current state. Never places an order. */
   authed.post("/orders/preview", async (c) => {
@@ -393,7 +432,10 @@ export function createApp() {
         marginPerUnit: z.number().positive(),
       }),
     );
-    const [acc, rs] = await Promise.all([account(c.env).getState(), risk(c.env).getSnapshot()]);
+    const [acc, rs] = await Promise.all([
+      account(c.env, acct(c)).getState(),
+      risk(c.env, acct(c)).getSnapshot(),
+    ]);
     const now = Date.now();
     const result = evaluateTrade(p, {
       mode: acc.mode,
@@ -416,12 +458,20 @@ export function createApp() {
   });
 
   authed.get("/trades", async (c) => {
-    const r = await c.env.DB.prepare("SELECT * FROM trades ORDER BY closed_at DESC LIMIT 100").all();
+    const r = await c.env.DB.prepare(
+      "SELECT * FROM trades WHERE account_id = ? ORDER BY closed_at DESC LIMIT 100",
+    )
+      .bind(acct(c))
+      .all();
     return c.json(r.results);
   });
 
   authed.get("/signals", async (c) => {
-    const r = await c.env.DB.prepare("SELECT * FROM signals ORDER BY created_at DESC LIMIT 100").all();
+    const r = await c.env.DB.prepare(
+      "SELECT * FROM signals WHERE account_id = ? ORDER BY created_at DESC LIMIT 100",
+    )
+      .bind(acct(c))
+      .all();
     return c.json(r.results);
   });
 
@@ -433,7 +483,7 @@ export function createApp() {
   authed.put("/strategies/:id", requireOwner, async (c) => {
     const input = await body(c, z.object({ enabled: z.boolean(), reason: z.string().min(3).max(500) }));
     const id = c.req.param("id");
-    const acc = await account(c.env).getState();
+    const acc = await account(c.env, acct(c)).getState();
     if (input.enabled && acc.mode === "SAFE_MODE") {
       return apiError(c, 409, "SAFE_MODE", "strategies cannot be activated in SAFE_MODE");
     }
@@ -451,7 +501,7 @@ export function createApp() {
     return c.json({ id, enabled: input.enabled });
   });
 
-  authed.get("/risk", async (c) => c.json(await risk(c.env).getSnapshot()));
+  authed.get("/risk", async (c) => c.json(await risk(c.env, acct(c)).getSnapshot()));
 
   authed.put(
     "/risk/limits",
@@ -459,12 +509,12 @@ export function createApp() {
     rateLimit((c) => c.env.TRADING_RATE_LIMITER),
     async (c) => {
       const limits = await body(c, riskLimitsSchema);
-      const acc = await account(c.env).getState();
-      const before = await risk(c.env).getSnapshot();
+      const acc = await account(c.env, acct(c)).getState();
+      const before = await risk(c.env, acct(c)).getSnapshot();
       if (acc.mode === "SAFE_MODE" && limits.maxRiskPerTradePct > before.limits.maxRiskPerTradePct) {
         return apiError(c, 409, "SAFE_MODE", "risk cannot be increased in SAFE_MODE");
       }
-      const after = await risk(c.env).updateLimits(limits);
+      const after = await risk(c.env, acct(c)).updateLimits(limits);
       await audit(c.env, {
         actor: actorOf(c),
         action: "risk.limits_update",
@@ -556,7 +606,7 @@ export function createApp() {
       .bind(id)
       .first<{ model_id: string; status: ModelStatus }>();
     if (!row) return apiError(c, 404, "NOT_FOUND", "model version not found");
-    const acc = await account(c.env).getState();
+    const acc = await account(c.env, acct(c)).getState();
     if (acc.mode === "SAFE_MODE" && input.status !== "RETIRED")
       return apiError(c, 409, "SAFE_MODE", "no model deployment in SAFE_MODE");
     const check = checkModelTransition(row.status, input.status);
@@ -631,15 +681,15 @@ export function createApp() {
   });
 
   authed.get("/stats/performance", async (c) => {
-    const mode = c.req.query("mode") ?? (await account(c.env).getState()).mode;
+    const mode = c.req.query("mode") ?? (await account(c.env, acct(c)).getState()).mode;
     const by = async (col: "strategy" | "regime" | "exit_reason") =>
       (
         await c.env.DB.prepare(
           `SELECT ${col} AS k, COUNT(*) AS n, SUM(pnl) AS pnl, AVG(r_multiple) AS avg_r,
              SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS win_rate
-           FROM trades WHERE mode = ? GROUP BY ${col} ORDER BY pnl DESC`,
+           FROM trades WHERE account_id = ? AND mode = ? GROUP BY ${col} ORDER BY pnl DESC`,
         )
-          .bind(mode)
+          .bind(acct(c), mode)
           .all()
       ).results;
     const [strategy, regime, exit] = await Promise.all([by("strategy"), by("regime"), by("exit_reason")]);
@@ -669,8 +719,8 @@ export function createApp() {
   // ------------------------------------------------------------ admin
   authed.post("/admin/kill-switch", requireOwner, async (c) => {
     const input = await body(c, killSwitchSchema);
-    const after = await account(c.env).setKillSwitch(input.active, input.trigger, input.reason);
-    if (input.active) await risk(c.env).lock(input.trigger);
+    const after = await account(c.env, acct(c)).setKillSwitch(input.active, input.trigger, input.reason);
+    if (input.active) await risk(c.env, acct(c)).lock(input.trigger);
     await audit(c.env, {
       actor: actorOf(c),
       action: input.active ? "kill_switch.activate" : "kill_switch.deactivate",
@@ -678,7 +728,7 @@ export function createApp() {
       requestId: c.get("requestId"),
       ip: ipOf(c),
     });
-    await realtime(c.env).broadcast("alert", { type: "KILL_SWITCH", ...input });
+    await realtime(c.env, acct(c)).broadcast("alert", { type: "KILL_SWITCH", ...input });
     return c.json(after);
   });
 

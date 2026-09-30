@@ -28,7 +28,7 @@ export default function Login() {
   };
 
   return (
-    <Screen title="AI Trading Bot">
+    <Screen title="AI Trading Bot" banner={false}>
       <Muted>Owner login. Trading involves risk; nothing here guarantees profit.</Muted>
       <Card>
         <Text style={{ color: colors.muted }}>Email</Text>

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { colors } from "../src/components/ui";
+import { useAccount } from "../src/stores/account";
 import { useAuth } from "../src/stores/auth";
 
 export default function RootLayout() {
@@ -18,9 +19,11 @@ export default function RootLayout() {
       }),
   );
   const hydrate = useAuth((s) => s.hydrate);
+  const hydrateAccount = useAccount((s) => s.hydrate);
   useEffect(() => {
     void hydrate();
-  }, [hydrate]);
+    void hydrateAccount();
+  }, [hydrate, hydrateAccount]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

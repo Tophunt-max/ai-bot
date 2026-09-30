@@ -12,7 +12,7 @@ services:
     environment:
       AI_SERVICE_URL: http://ai-service:8000
       INSTRUMENTS_FILE: /app/config/instruments.json
-      STATE_FILE: /app/state/engine.json
+      STATE_DIR: /app/state
     # No published ports: reachable only through cloudflared on the internal network.
     expose: ["8080"]
     volumes:
