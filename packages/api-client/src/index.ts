@@ -2,6 +2,7 @@ import type {
   ApiError,
   DashboardSummary,
   KillSwitchTrigger,
+  ModelStatus,
   RiskLimits,
   RiskState,
   TradingMode,
@@ -22,6 +23,43 @@ export interface BrokerInfo {
   adapter: "implemented" | "planned";
   dailyLogin: boolean;
   docsUrl?: string;
+}
+
+export interface BacktestRow {
+  id: string;
+  strategy: string | null;
+  status: string;
+  params: string;
+  metrics: string; // JSON
+  report_r2_key: string | null;
+  created_at: number;
+}
+
+export interface ModelRow {
+  id: string;
+  model_id: string;
+  version: string;
+  features_version: string;
+  dataset_version: string;
+  status: ModelStatus;
+  validation_metrics: string;
+  out_of_sample_metrics: string;
+  created_at: number;
+}
+
+export interface PerfRow {
+  k: string | null;
+  n: number;
+  pnl: number;
+  avg_r: number | null;
+  win_rate: number;
+}
+
+export interface PerformanceStats {
+  mode: TradingMode;
+  strategy: PerfRow[];
+  regime: PerfRow[];
+  exit: PerfRow[];
 }
 
 export class ApiClientError extends Error {
@@ -87,6 +125,23 @@ export function createApiClient(opts: ApiClientOptions) {
     strategies: () => call<Array<{ id: string; name: string; enabled: number }>>("GET", "/strategies"),
     risk: () => call<{ limits: RiskLimits; state: RiskState }>("GET", "/risk"),
     updateRiskLimits: (limits: RiskLimits) => call<RiskLimits>("PUT", "/risk/limits", limits),
+    setStrategyEnabled: (id: string, enabled: boolean, reason: string) =>
+      call<{ id: string; enabled: boolean }>("PUT", `/strategies/${encodeURIComponent(id)}`, {
+        enabled,
+        reason,
+      }),
+    backtests: () => call<BacktestRow[]>("GET", "/backtests"),
+    backtest: (id: string) => call<BacktestRow>("GET", `/backtests/${encodeURIComponent(id)}`),
+    models: () => call<ModelRow[]>("GET", "/models"),
+    setModelStatus: (id: string, status: ModelStatus, reason: string) =>
+      call<{ id: string; status: ModelStatus }>("PUT", `/models/${encodeURIComponent(id)}/status`, {
+        status,
+        reason,
+      }),
+    performance: (mode?: TradingMode) =>
+      call<PerformanceStats>("GET", `/stats/performance${mode ? `?mode=${mode}` : ""}`),
+    registerPushToken: (token: string, platform?: string) =>
+      call<{ ok: boolean }>("POST", "/notifications/push-token", { token, platform }),
     brokers: () => call<BrokerInfo[]>("GET", "/market/brokers"),
     session: () => call<{ phase: string; canOpenNewPosition: boolean }>("GET", "/market/session"),
     killSwitch: (active: boolean, reason: string, trigger: KillSwitchTrigger = "MANUAL") =>

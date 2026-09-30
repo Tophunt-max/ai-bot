@@ -63,8 +63,11 @@ function makeEnv(passwordHash: string) {
             auditRows.push(args);
             return { meta: { changes: 1 } };
           },
+          first: async () => null,
+          all: async () => ({ results: [] }),
         }),
         all: async () => ({ results: [] }),
+        first: async () => null,
       }),
     },
     TRADING_ACCOUNT: ns({
@@ -92,7 +95,7 @@ function makeEnv(passwordHash: string) {
         return riskSnap;
       },
     }),
-    POSITION_MANAGER: ns({ list: async () => [] }),
+    POSITION_MANAGER: ns({ list: async () => [], getSnapshot: async () => undefined }),
     ORDER_MANAGER: ns({ listOpen: async () => [] }),
     REALTIME: ns({ broadcast: async () => 0 }),
   } as unknown as Env;
@@ -239,8 +242,8 @@ describe("api", () => {
     expect(["SESSION", "DATA_FRESHNESS"]).toContain(b.failedCheck);
   });
 
-  it("gateway heartbeat requires a valid HMAC and locks on egress IP mismatch", async () => {
-    const { env, riskSnap } = makeEnv(hash);
+  it("gateway heartbeat requires a valid HMAC and locks on egress IP mismatch (live modes)", async () => {
+    const { env, riskSnap, accountState } = makeEnv(hash);
     const app = createApp();
     const path = "/api/v1/system/gateway/heartbeat";
     const payload = JSON.stringify({
@@ -257,6 +260,16 @@ describe("api", () => {
     );
     expect(bad.status).toBe(401);
 
+    // PAPER: egress IP is irrelevant (no broker orders) → no lock
+    const h0 = await signRequest(GATEWAY_HMAC_SECRET, "POST", path, payload);
+    await app.request(
+      path,
+      { method: "POST", body: payload, headers: { ...h0, "Content-Type": "application/json" } },
+      env,
+    );
+    expect(riskSnap.state.tradingLocked).toBe(false);
+
+    accountState.mode = "LIVE";
     const headers = await signRequest(GATEWAY_HMAC_SECRET, "POST", path, payload);
     const ok = await app.request(
       path,

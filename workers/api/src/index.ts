@@ -2,6 +2,7 @@ import { toIst } from "@atb/trading-core";
 import { app } from "./app";
 import type { Env } from "./env";
 import { OWNER_ACCOUNT } from "./env";
+import { deliver, type NotifyMessage } from "./lib/notify";
 
 export { TradingAccountDO } from "./do/trading-account";
 export { RiskManagerDO } from "./do/risk-manager";
@@ -79,7 +80,12 @@ export default {
     for (const msg of batch.messages) {
       try {
         if (batch.queue.endsWith("notifications")) {
-          await sendTelegram(env, String(msg.body.message ?? msg.body.event ?? "event"));
+          const b = msg.body as Partial<NotifyMessage>;
+          await deliver(env, {
+            event: String(b.event ?? "EVENT"),
+            message: String(b.message ?? ""),
+            dedupeKey: String(b.dedupeKey ?? msg.id),
+          });
         }
         // trade-events / signal-processing consumers are implemented in later phases.
         msg.ack();
@@ -90,13 +96,3 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env, Record<string, unknown>>;
-
-async function sendTelegram(env: Env, text: string): Promise<void> {
-  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
-  const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: `[ATB] ${text}` }),
-  });
-  if (!r.ok) throw new Error(`telegram HTTP ${r.status}`);
-}

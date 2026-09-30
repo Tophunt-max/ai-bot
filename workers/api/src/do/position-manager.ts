@@ -15,10 +15,32 @@ export interface ManagedPosition extends Position {
  * Open positions & SL/TP lifecycle. Invariant: an open position ALWAYS has a stop,
  * and a stop may only be tightened (moved in the protective direction), never removed/widened.
  */
+export interface EngineSnapshot {
+  at: number;
+  mode: string;
+  equity: number;
+  dailyPnl: number;
+  monitor?: { state: string; rollingExpectancyR: number; riskMultiplier: number; trades: number };
+  positions: Array<ManagedPosition & { mode: string }>;
+}
+
 export class PositionManagerDO extends DurableObject<Env> {
   async list(): Promise<ManagedPosition[]> {
+    const snap = await this.ctx.storage.get<EngineSnapshot>("snapshot");
+    if (snap) return snap.positions.filter((p) => p.quantity !== 0);
     const all = await this.ctx.storage.list<ManagedPosition>({ prefix: "pos:" });
     return [...all.values()].filter((p) => p.quantity !== 0);
+  }
+
+  /** Latest gateway snapshot (the gateway reconciles with the broker; the broker is the truth). */
+  async setSnapshot(s: EngineSnapshot): Promise<void> {
+    const prev = await this.ctx.storage.get<EngineSnapshot>("snapshot");
+    if (prev && prev.at > s.at) return; // ignore out-of-order snapshots
+    await this.ctx.storage.put("snapshot", s);
+  }
+
+  async getSnapshot(): Promise<EngineSnapshot | undefined> {
+    return this.ctx.storage.get<EngineSnapshot>("snapshot");
   }
 
   async upsert(p: ManagedPosition): Promise<ManagedPosition> {

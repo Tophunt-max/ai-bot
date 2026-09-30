@@ -42,6 +42,8 @@ jobs:
       - run: uv venv -p 3.12 .venv && uv pip install -p .venv -e ".[dev]"
       - run: .venv/bin/ruff check . && .venv/bin/ruff format --check .
       - run: .venv/bin/pytest -q
+        env:
+          LOKY_MAX_CPU_COUNT: "1"
 
   terraform:
     runs-on: ubuntu-latest

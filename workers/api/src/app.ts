@@ -5,7 +5,12 @@ import { sign } from "hono/jwt";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
 import { listBrokers } from "@atb/brokers";
-import type { DashboardSummary } from "@atb/shared-types";
+import {
+  KILL_SWITCH_TRIGGERS,
+  MODEL_STATUSES,
+  type DashboardSummary,
+  type ModelStatus,
+} from "@atb/shared-types";
 import { DEFAULT_SESSION, evaluateTrade, sessionPhase, canOpenNewPosition } from "@atb/trading-core";
 import {
   instrumentSchema,
@@ -16,7 +21,11 @@ import {
   z,
 } from "@atb/validation";
 import { OWNER_ACCOUNT, type AppBindings, type Env } from "./env";
+import type { EngineSnapshot } from "./do/position-manager";
 import { audit } from "./lib/audit";
+import { ingestEvents } from "./lib/ingest";
+import { checkModelTransition } from "./lib/model-policy";
+import { notify } from "./lib/notify";
 import { timingSafeEqual, verifyPassword } from "./lib/crypto";
 import { ModeChangeError } from "./lib/mode-policy";
 import {
@@ -142,8 +151,14 @@ export function createApp() {
         marketDataAt: z.number().optional(),
       }),
     );
-    if (!hb.egressIpOk) await risk(c.env).lock("EGRESS_IP_MISMATCH");
+    // Egress IP only matters for real-broker orders (CANARY/LIVE); PAPER/SHADOW never reach a broker.
+    const modeNow = (await account(c.env).getState()).mode;
+    if (!hb.egressIpOk && (modeNow === "CANARY" || modeNow === "LIVE"))
+      await risk(c.env).lock("EGRESS_IP_MISMATCH");
     if (!hb.brokerSessionValid) await risk(c.env).lock("BROKER_SESSION_EXPIRED");
+    await c.env.CACHE?.put("gateway-health", JSON.stringify({ ...hb, at: Date.now() }), {
+      expirationTtl: 300,
+    });
     const lease = await account(c.env).acquireLease(hb.nodeId);
     const state = await account(c.env).getState();
     const rs = await risk(c.env).getSnapshot();
@@ -170,7 +185,90 @@ export function createApp() {
     );
     const r = await risk(c.env).applyReconciliation(snap);
     await realtime(c.env).broadcast("risk", r.state);
+    const eq = r.state.equity;
+    const lossPct = eq > 0 ? (Math.max(0, -r.state.dailyRealisedPnl) / eq) * 100 : 0;
+    const ddPct = r.state.peakEquity > 0 ? ((r.state.peakEquity - eq) / r.state.peakEquity) * 100 : 0;
+    const day = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+    if (lossPct >= 0.75 * r.limits.maxDailyLossPct) {
+      await notify(c.env, {
+        event: "DAILY_LOSS_WARNING",
+        message: `Daily loss ${lossPct.toFixed(2)}% of equity (limit ${r.limits.maxDailyLossPct}%)`,
+        dedupeKey: `dlw-${day}`,
+      });
+    }
+    if (ddPct >= 0.75 * r.limits.maxDrawdownPct) {
+      await notify(c.env, {
+        event: "DRAWDOWN_WARNING",
+        message: `Drawdown ${ddPct.toFixed(2)}% (limit ${r.limits.maxDrawdownPct}%)`,
+        dedupeKey: `ddw-${day}`,
+      });
+    }
     return c.json(r.state);
+  });
+
+  gw.post("/events", async (c) => {
+    const input = await body(
+      c,
+      z.object({
+        nodeId: z.string().min(3).max(40),
+        events: z
+          .array(
+            z.object({
+              id: z.string().min(3).max(200),
+              type: z.enum(["SIGNAL", "ORDER", "TRADE_OPENED", "TRADE_CLOSED", "RISK_EVENT", "POSITIONS"]),
+              at: z.number(),
+              mode: z.string().max(20),
+              payload: z.record(z.string(), z.unknown()),
+            }),
+          )
+          .max(200),
+      }),
+    );
+    const res = await ingestEvents(c.env, input.nodeId, input.events);
+    for (const n of res.notifications) await notify(c.env, n);
+    if (res.latestPositions) {
+      const p = res.latestPositions.payload as unknown as Omit<EngineSnapshot, "at" | "mode">;
+      await positions(c.env).setSnapshot({
+        ...p,
+        at: res.latestPositions.at,
+        mode: res.latestPositions.mode,
+      });
+      await realtime(c.env).broadcast("position", p.positions);
+      await realtime(c.env).broadcast("pnl", { equity: p.equity, dailyPnl: p.dailyPnl });
+    }
+    for (const e of input.events) {
+      if (e.type === "SIGNAL") await realtime(c.env).broadcast("signal", e.payload);
+      if (e.type === "ORDER" || e.type === "TRADE_OPENED" || e.type === "TRADE_CLOSED")
+        await realtime(c.env).broadcast("order", { type: e.type, ...e.payload });
+    }
+    return c.json({ inserted: res.inserted, duplicates: res.duplicates });
+  });
+
+  /** Automatic kill switch requested by the gateway (independent of AI). */
+  gw.post("/kill-switch", async (c) => {
+    const input = await body(
+      c,
+      z.object({ trigger: z.enum(KILL_SWITCH_TRIGGERS), reason: z.string().min(3).max(500) }),
+    );
+    const before = await account(c.env).getState();
+    const after = await account(c.env).setKillSwitch(true, input.trigger, input.reason);
+    await risk(c.env).lock(input.trigger);
+    await audit(c.env, {
+      actor: "gateway",
+      action: "kill_switch.auto_activate",
+      before: before.killSwitch,
+      after: input,
+      requestId: c.get("requestId"),
+    });
+    if (!before.killSwitch.active) {
+      await notify(c.env, {
+        event: "KILL_SWITCH",
+        message: `AUTO kill switch: ${input.trigger} — ${input.reason}`,
+        dedupeKey: `ks-${input.trigger}-${Math.floor(Date.now() / 600_000)}`,
+      });
+    }
+    await realtime(c.env).broadcast("alert", { type: "KILL_SWITCH", ...input });
+    return c.json(after);
   });
 
   v1.route("/system/gateway", gw);
@@ -227,10 +325,19 @@ export function createApp() {
   );
 
   authed.get("/portfolio", async (c) => {
-    const [acc, rs, pos] = await Promise.all([
+    const [acc, rs, pos, snap, totals, lastSig, gwHealth] = await Promise.all([
       account(c.env).getState(),
       risk(c.env).getSnapshot(),
       positions(c.env).list(),
+      positions(c.env).getSnapshot(),
+      c.env.DB.prepare("SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades WHERE mode = ?")
+        .bind((await account(c.env).getState()).mode)
+        .first<{ pnl: number }>(),
+      c.env.DB.prepare("SELECT regime FROM signals ORDER BY created_at DESC LIMIT 1").first<{
+        regime: string;
+      }>(),
+      c.env.CACHE?.get("gateway-health", "json") as
+        Promise<{ brokerSessionValid?: boolean; egressIpOk?: boolean; at?: number } | null> | undefined,
     ]);
     const st = rs.state;
     const dd = st.peakEquity > 0 ? ((st.peakEquity - st.equity) / st.peakEquity) * 100 : 0;
@@ -239,11 +346,17 @@ export function createApp() {
       portfolioValue: st.equity,
       availableCapital: st.equity - st.openRisk,
       todayPnl: st.dailyRealisedPnl,
-      overallPnl: 0,
+      overallPnl: totals?.pnl ?? 0,
       currentDrawdownPct: dd,
       openPositions: pos.length,
-      regime: "UNKNOWN",
-      aiStatus: "DISABLED",
+      regime: (lastSig?.regime as DashboardSummary["regime"]) ?? "UNKNOWN",
+      aiStatus: !snap?.monitor
+        ? "DISABLED"
+        : snap.monitor.state === "NORMAL"
+          ? "ACTIVE"
+          : snap.monitor.state === "REDUCED"
+            ? "DEGRADED"
+            : "DISABLED",
       mode: acc.mode,
       riskUtilisationPct: dailyLimit > 0 ? (Math.max(0, -st.dailyRealisedPnl) / dailyLimit) * 100 : 0,
       dailyLossRemaining: Math.max(0, dailyLimit + Math.min(0, st.dailyRealisedPnl)),
@@ -251,8 +364,13 @@ export function createApp() {
         api: "ok",
         gateway: acc.lease && acc.lease.expiresAt > Date.now() ? "ok" : "down",
         aiService: "unknown",
-        marketData: "unknown",
-        brokerSession: "unknown",
+        marketData: snap && Date.now() - snap.at < 120_000 ? "fresh" : snap ? "stale" : "unknown",
+        brokerSession:
+          gwHealth?.brokerSessionValid === undefined
+            ? "unknown"
+            : gwHealth.brokerSessionValid
+              ? "valid"
+              : "expired",
         checkedAt: Date.now(),
       },
     };
@@ -382,6 +500,163 @@ export function createApp() {
       .run();
     await c.env.Q_BACKTESTS.send({ id, ...input });
     return c.json({ id, status: "QUEUED" }, 202);
+  });
+
+  authed.post("/models", requireOwner, async (c) => {
+    const m = await body(
+      c,
+      z.object({
+        modelId: z.string().min(2).max(60),
+        version: z.string().min(1).max(40),
+        featuresVersion: z.string().max(40),
+        datasetVersion: z.string().max(80),
+        trainingDate: z.number(),
+        validationMetrics: z.record(z.string(), z.unknown()).default({}),
+        outOfSampleMetrics: z.record(z.string(), z.unknown()).default({}),
+        artifactR2Key: z.string().max(200).optional(),
+      }),
+    );
+    const id = `mv_${m.modelId}_${m.version}`.replace(/[^A-Za-z0-9_.-]/g, "_");
+    const now = Date.now();
+    await c.env.DB.prepare(
+      `INSERT INTO model_versions (id, model_id, version, features_version, dataset_version, training_date, validation_metrics,
+         out_of_sample_metrics, artifact_r2_key, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)`,
+    )
+      .bind(
+        id,
+        m.modelId,
+        m.version,
+        m.featuresVersion,
+        m.datasetVersion,
+        m.trainingDate,
+        JSON.stringify(m.validationMetrics),
+        JSON.stringify(m.outOfSampleMetrics),
+        m.artifactR2Key ?? null,
+        now,
+        now,
+      )
+      .run();
+    await audit(c.env, {
+      actor: actorOf(c),
+      action: "model.register",
+      target: id,
+      after: m,
+      requestId: c.get("requestId"),
+    });
+    return c.json({ id, status: "DRAFT" }, 201);
+  });
+
+  authed.put("/models/:id/status", requireOwner, async (c) => {
+    const input = await body(
+      c,
+      z.object({ status: z.enum(MODEL_STATUSES), reason: z.string().min(3).max(500) }),
+    );
+    const id = c.req.param("id");
+    const row = await c.env.DB.prepare("SELECT model_id, status FROM model_versions WHERE id = ?")
+      .bind(id)
+      .first<{ model_id: string; status: ModelStatus }>();
+    if (!row) return apiError(c, 404, "NOT_FOUND", "model version not found");
+    const acc = await account(c.env).getState();
+    if (acc.mode === "SAFE_MODE" && input.status !== "RETIRED")
+      return apiError(c, 409, "SAFE_MODE", "no model deployment in SAFE_MODE");
+    const check = checkModelTransition(row.status, input.status);
+    if (check) return apiError(c, 409, "MODEL_TRANSITION_REJECTED", check);
+    const now = Date.now();
+    const stmts = [
+      c.env.DB.prepare("UPDATE model_versions SET status = ?, updated_at = ? WHERE id = ?").bind(
+        input.status,
+        now,
+        id,
+      ),
+    ];
+    if (input.status === "PRODUCTION") {
+      stmts.unshift(
+        c.env.DB.prepare(
+          "UPDATE model_versions SET status = 'RETIRED', updated_at = ? WHERE model_id = ? AND status = 'PRODUCTION' AND id != ?",
+        ).bind(now, row.model_id, id),
+      );
+    }
+    await c.env.DB.batch(stmts);
+    await audit(c.env, {
+      actor: actorOf(c),
+      action: "model.status",
+      target: id,
+      before: row.status,
+      after: input,
+      requestId: c.get("requestId"),
+    });
+    return c.json({ id, status: input.status });
+  });
+
+  authed.post("/backtests/report", requireOwner, async (c) => {
+    const input = await body(
+      c,
+      z.object({
+        strategy: z.string().max(80).default("ensemble"),
+        params: z.record(z.string(), z.unknown()).default({}),
+        metrics: z.record(z.string(), z.unknown()),
+        verdict: z.enum(["PASS", "FAIL"]).optional(),
+        report: z.unknown().optional(),
+      }),
+    );
+    const id = `bt_${crypto.randomUUID().replace(/-/g, "")}`;
+    const key = `backtests/${id}.json`;
+    if (input.report !== undefined)
+      await c.env.ARTIFACTS.put(key, JSON.stringify(input.report), {
+        httpMetadata: { contentType: "application/json" },
+      });
+    const now = Date.now();
+    await c.env.DB.prepare(
+      "INSERT INTO backtests (id, strategy, params, status, metrics, report_r2_key, created_at, finished_at) VALUES (?, ?, ?, 'DONE', ?, ?, ?, ?)",
+    )
+      .bind(
+        id,
+        input.strategy,
+        JSON.stringify(input.params),
+        JSON.stringify({ ...input.metrics, verdict: input.verdict }),
+        input.report !== undefined ? key : null,
+        now,
+        now,
+      )
+      .run();
+    return c.json({ id }, 201);
+  });
+
+  authed.get("/backtests/:id", async (c) => {
+    const row = await c.env.DB.prepare("SELECT * FROM backtests WHERE id = ?")
+      .bind(c.req.param("id"))
+      .first<Record<string, unknown>>();
+    if (!row) return apiError(c, 404, "NOT_FOUND", "backtest not found");
+    return c.json(row);
+  });
+
+  authed.get("/stats/performance", async (c) => {
+    const mode = c.req.query("mode") ?? (await account(c.env).getState()).mode;
+    const by = async (col: "strategy" | "regime" | "exit_reason") =>
+      (
+        await c.env.DB.prepare(
+          `SELECT ${col} AS k, COUNT(*) AS n, SUM(pnl) AS pnl, AVG(r_multiple) AS avg_r,
+             SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS win_rate
+           FROM trades WHERE mode = ? GROUP BY ${col} ORDER BY pnl DESC`,
+        )
+          .bind(mode)
+          .all()
+      ).results;
+    const [strategy, regime, exit] = await Promise.all([by("strategy"), by("regime"), by("exit_reason")]);
+    return c.json({ mode, strategy, regime, exit });
+  });
+
+  authed.post("/notifications/push-token", async (c) => {
+    const input = await body(
+      c,
+      z.object({ token: z.string().min(10).max(200), platform: z.string().max(20).optional() }),
+    );
+    await c.env.DB.prepare(
+      "INSERT OR REPLACE INTO push_tokens (token, user_id, platform, created_at) VALUES (?, 'owner', ?, ?)",
+    )
+      .bind(input.token, input.platform ?? null, Date.now())
+      .run();
+    return c.json({ ok: true });
   });
 
   authed.get("/market/session", (c) => {

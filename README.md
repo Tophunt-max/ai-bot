@@ -32,20 +32,22 @@ Every trade has to pass these checks, and none of them can be bypassed:
 
 ## Monorepo
 
-| Path                         | What                                                                                                     |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `apps/mobile`                | Expo SDK 57 + Expo Router, TanStack Query, Zustand, SecureStore                                          |
-| `workers/api`                | Cloudflare Worker (Hono): API, 5 Durable Objects, cron, queues                                           |
-| `services/execution-gateway` | Node service on the static-IP VMs: the only code that calls broker order APIs                            |
-| `ai-service`                 | FastAPI inference (baseline regime model; signals default to `NO_TRADE`)                                 |
-| `packages/shared-types`      | Domain types (modes, orders, risk, brokers)                                                              |
-| `packages/validation`        | Zod schemas (MARKET orders rejected, lot multiples, OPS caps)                                            |
-| `packages/trading-core`      | Risk gateway, sizing, order FSM, IST session, price protection, Indian costs, paper broker, HMAC signing |
-| `packages/brokers`           | Adapters + registry for 22 Indian brokers                                                                |
-| `packages/api-client`        | Typed API client used by the app                                                                         |
-| `database/migrations`        | D1 schema + seed (audit log is append-only via triggers)                                                 |
-| `database/timescale`         | Historical market-data schema (TimescaleDB)                                                              |
-| `infrastructure`             | Terraform (Azure + DO), cloud-init hardening, prod docker compose                                        |
+| Path                         | What                                                                                                                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/mobile`                | Expo SDK 57 + Expo Router, TanStack Query, Zustand, SecureStore                                                                                                          |
+| `workers/api`                | Cloudflare Worker (Hono): API, 5 Durable Objects, cron, queues                                                                                                           |
+| `services/execution-gateway` | Static-IP VM service: live TradingEngine (paper/shadow/canary/live), broker-resident stops, reconciliation, auto kill-switch, the ONLY code that calls broker order APIs |
+| `ai-service`                 | FastAPI: baseline regime model + optional meta-label filter (triple-barrier labels, purged walk-forward, registry, PSI drift)                                            |
+| `packages/engine`            | Shared by backtest AND live: causal features, regime, 7 strategies, ensemble, trade manager, event-driven backtester, metrics, walk-forward, performance monitor         |
+| `backtesting`                | CLI: Kite history download, backtest + walk-forward verdict, dataset export for AI training                                                                              |
+| `packages/shared-types`      | Domain types (modes, orders, risk, brokers)                                                                                                                              |
+| `packages/validation`        | Zod schemas (MARKET orders rejected, lot multiples, OPS caps)                                                                                                            |
+| `packages/trading-core`      | Risk gateway, sizing, order FSM, IST session, price protection, Indian costs, paper broker, HMAC signing                                                                 |
+| `packages/brokers`           | Adapters + registry for 22 Indian brokers                                                                                                                                |
+| `packages/api-client`        | Typed API client used by the app                                                                                                                                         |
+| `database/migrations`        | D1 schema + seed (audit log is append-only via triggers)                                                                                                                 |
+| `database/timescale`         | Historical market-data schema (TimescaleDB)                                                                                                                              |
+| `infrastructure`             | Terraform (Azure + DO), cloud-init hardening, prod docker compose                                                                                                        |
 
 ## Brokers
 
@@ -55,6 +57,8 @@ Every trade has to pass these checks, and none of them can be bypassed:
 | Registered, adapter planned (they fail closed until implemented)     | Angel One, Fyers, Kotak Neo, ICICI Breeze, 5paisa, Shoonya / Flattrade / Zebu (Noren), Tradejini, Alice Blue, IIFL, Groww, Motilal Oswal, Paytm Money, Nuvama, SAMCO, m.Stock, Definedge, Sharekhan |
 
 ## Quick start (development: PAPER mode only)
+
+Full operating guide: [docs/operations.md](docs/operations.md). Static IP / broker whitelisting: [docs/static-ip-setup.md](docs/static-ip-setup.md).
 
 ```bash
 pnpm install
@@ -71,6 +75,15 @@ docker compose -f docker-compose.dev.yml up --build
 
 # App
 pnpm dev:mobile                     # press w for web, or scan the QR code with Expo Go
+```
+
+```bash
+# Backtest (synthetic data only proves the pipeline — use real downloaded history for decisions)
+pnpm --filter @atb/backtesting backtest -- --synthetic 120 --walk-forward
+pnpm --filter @atb/backtesting backtest -- --csv data/INFY-5m.csv --symbol INFY --walk-forward
+
+# Paper simulation of the LIVE engine on history (gateway + local Worker)
+REPLAY_CSV=data/INFY-5m.csv INSTRUMENTS_FILE=infrastructure/docker/instruments.example.json pnpm dev:gateway
 ```
 
 AI service tests: `cd ai-service && uv venv -p 3.12 .venv && uv pip install -p .venv -e ".[dev]" && .venv/bin/pytest`.
@@ -91,6 +104,12 @@ AI service tests: `cd ai-service && uv venv -p 3.12 .venv && uv pip install -p .
 
 ## Status
 
-**Phase 1 (foundation) is complete.** The next phases are D1 data layer → market data → features →
-strategies → backtesting (see the V3 plan). See [docs/static-ip-setup.md](docs/static-ip-setup.md)
-before going beyond PAPER.
+All 17 planned phases are implemented and tested (≈120 automated tests, plus an end-to-end paper
+run: local Worker + D1 + gateway replay → signals, orders, trades, journal, stats, kill switch).
+
+**What is NOT proven:** profitability. On random synthetic data the system correctly loses money
+after costs, the walk-forward verdict is **FAIL**, and the performance monitor switches trading off.
+That is the intended behaviour. You need real historical data, a **PASS** verdict, and months of
+PAPER → SHADOW → CANARY before any LIVE capital. Zerodha, Upstox and Dhan adapters are tested
+against mocked APIs, so verify each one with tiny CANARY orders. The other 19 brokers fail closed
+until their adapters are written.

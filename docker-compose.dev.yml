@@ -23,6 +23,9 @@ services:
     build: ./ai-service
     environment:
       AI_SERVICE_SECRET: dev-ai-secret-0123456789abcdef0123456789
+      MODELS_DIR: /app/models
+    volumes:
+      - ./models:/app/models
     ports: ["8000:8000"]
 
   gateway:
