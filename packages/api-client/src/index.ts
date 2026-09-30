@@ -64,6 +64,20 @@ export interface PerformanceStats {
   exit: PerfRow[];
 }
 
+export interface CryptoExchangeRow {
+  id: string;
+  name: string;
+  countries: string[];
+  websocket: boolean;
+  spot: boolean;
+  perp: boolean;
+  certified: boolean;
+  ohlcv: boolean;
+  india: string;
+  note?: string;
+  supported?: boolean;
+}
+
 export class ApiClientError extends Error {
   constructor(
     readonly status: number,
@@ -150,6 +164,11 @@ export function createApiClient(opts: ApiClientOptions) {
     registerPushToken: (token: string, platform?: string) =>
       call<{ ok: boolean }>("POST", "/notifications/push-token", { token, platform }),
     brokers: () => call<BrokerInfo[]>("GET", "/market/brokers"),
+    cryptoExchanges: () =>
+      call<{ ccxtVersion: string; exchanges: CryptoExchangeRow[]; disclaimer: string }>(
+        "GET",
+        "/market/crypto-exchanges",
+      ),
     session: () => call<{ phase: string; canOpenNewPosition: boolean }>("GET", "/market/session"),
     killSwitch: (active: boolean, reason: string, trigger: KillSwitchTrigger = "MANUAL") =>
       call<AccountState>("POST", "/admin/kill-switch", { active, reason, trigger }),

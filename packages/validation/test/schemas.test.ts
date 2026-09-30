@@ -83,3 +83,38 @@ describe("riskLimitsSchema", () => {
     expect(riskLimitsSchema.safeParse({ ...base, maxOrdersPerSecond: 10 }).success).toBe(false);
   });
 });
+
+describe("crypto instruments", () => {
+  const btc = {
+    id: "CRYPTO:binance:BTC/USDT",
+    exchange: "CRYPTO",
+    tradingSymbol: "BTCUSDT",
+    instrumentType: "SPOT",
+    lotSize: 0.00001,
+    tickSize: 0.01,
+    venue: "binance",
+    venueSymbol: "BTC/USDT",
+    quoteCurrency: "USDT",
+  };
+  const base = {
+    clientOrderId: "sig_12345678",
+    instrument: btc,
+    side: "BUY",
+    orderType: "LIMIT",
+    product: "DELIVERY",
+    price: 60000,
+  };
+  it("accepts fractional quantities on the step", () => {
+    expect(orderRequestSchema.safeParse({ ...base, quantity: 0.00123 }).success).toBe(true);
+  });
+  it("rejects off-step quantities and missing venue", () => {
+    expect(orderRequestSchema.safeParse({ ...base, quantity: 0.000123 }).success).toBe(false);
+    expect(
+      orderRequestSchema.safeParse({ ...base, quantity: 0.001, instrument: { ...btc, venue: undefined } })
+        .success,
+    ).toBe(false);
+  });
+  it("still requires integer lots for NSE", () => {
+    expect(orderRequestSchema.safeParse({ ...base, instrument: nifty, quantity: 75.5 }).success).toBe(false);
+  });
+});

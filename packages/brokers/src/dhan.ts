@@ -26,6 +26,7 @@ const SEGMENT: Record<Exchange, string> = {
   BFO: "BSE_FNO",
   MCX: "MCX_COMM",
   CDS: "NSE_CURRENCY",
+  CRYPTO: "UNSUPPORTED",
 };
 const SEGMENT_BACK: Record<string, Exchange> = Object.fromEntries(
   Object.entries(SEGMENT).map(([k, v]) => [v, k as Exchange]),

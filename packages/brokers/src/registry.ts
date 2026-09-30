@@ -37,6 +37,17 @@ export const BROKERS: Record<BrokerId, BrokerInfo> = {
     docsVerified: true,
     adapter: "implemented",
   },
+  crypto: {
+    id: "crypto",
+    name: "Crypto exchanges via CCXT (100+ venues)",
+    auth: "STATIC_TOKEN",
+    dailyLogin: false,
+    sessionBoundToIp: false,
+    docsUrl: "https://docs.ccxt.com/",
+    docsVerified: true,
+    adapter: "implemented",
+    notes: "Venue per instrument (binance, kucoin, delta, zebpay…). Not SEBI-regulated; see docs/crypto.md.",
+  },
   zerodha: {
     id: "zerodha",
     name: "Zerodha Kite Connect",

@@ -27,6 +27,9 @@ export default function Profile() {
         </Link>
       </Card>
       <Card title="Settings">
+        <Link href="/settings/crypto-exchanges" style={link}>
+          Crypto exchanges →
+        </Link>
         <Link href="/settings/broker" style={link}>
           Broker →
         </Link>

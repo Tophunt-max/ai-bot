@@ -1,6 +1,12 @@
 import type { BacktestResult, ClosedTrade, Metrics, WalkForwardResult } from "@atb/engine";
 
-const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+let CUR = "₹";
+/** Report currency symbol (₹ for Indian markets, "USDT " etc. for crypto). */
+export const setReportCurrency = (c: string) => {
+  CUR = c === "INR" ? "₹" : `${c} `;
+};
+const inr = (n: number) =>
+  `${CUR}${n.toLocaleString("en-IN", { maximumFractionDigits: CUR === "₹" ? 0 : 2 })}`;
 const f2 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : String(n));
 
 export function metricsTable(m: Metrics): string {

@@ -1,0 +1,28 @@
+[
+  {
+    "id": "CRYPTO:binance:BTC/USDT",
+    "exchange": "CRYPTO",
+    "tradingSymbol": "BTCUSDT",
+    "instrumentType": "SPOT",
+    "lotSize": 0.00001,
+    "tickSize": 0.01,
+    "venue": "binance",
+    "venueSymbol": "BTC/USDT",
+    "quoteCurrency": "USDT",
+    "minQty": 0.00001,
+    "minNotional": 5
+  },
+  {
+    "id": "CRYPTO:binance:ETH/USDT",
+    "exchange": "CRYPTO",
+    "tradingSymbol": "ETHUSDT",
+    "instrumentType": "SPOT",
+    "lotSize": 0.0001,
+    "tickSize": 0.01,
+    "venue": "binance",
+    "venueSymbol": "ETH/USDT",
+    "quoteCurrency": "USDT",
+    "minQty": 0.0001,
+    "minNotional": 5
+  }
+]

@@ -27,14 +27,17 @@ import {
   type InstrumentType,
   type ProductType,
   type Timeframe,
+  type Instrument,
 } from "@atb/shared-types";
-import { DEFAULT_LIMITS } from "@atb/trading-core";
-import { summarize, summarizeWalkForward, tradesCsv } from "./report";
+import { CRYPTO_SESSION, DEFAULT_LIMITS } from "@atb/trading-core";
+import { setReportCurrency, summarize, summarizeWalkForward, tradesCsv } from "./report";
 
 const { values } = parseArgs({
   args: process.argv.slice(2).filter((a) => a !== "--"),
   options: {
     csv: { type: "string", multiple: true },
+    /** Instrument JSON (e.g. from download:crypto). Required for CRYPTO. */
+    instrument: { type: "string", multiple: true },
     symbol: { type: "string", multiple: true },
     exchange: { type: "string", default: "NSE" },
     type: { type: "string", default: "EQ" },
@@ -93,25 +96,33 @@ if (values.synthetic) {
     console.info(
       `${symbol}: ${v.clean.length} candles${v.issues.length ? `, issues ${JSON.stringify(issues)}` : ""}`,
     );
-    series.push({
-      instrument: {
-        id: `${exchange}:${symbol}`,
-        exchange,
-        tradingSymbol: symbol,
-        instrumentType: itype,
-        lotSize: Number(values.lot),
-        tickSize: Number(values.tick),
-      },
-      candles: v.clean,
-    });
+    const instFile = values.instrument?.[idx];
+    const instrument: Instrument = instFile
+      ? (JSON.parse(readFileSync(instFile, "utf8")) as Instrument)
+      : {
+          id: `${exchange}:${symbol}`,
+          exchange,
+          tradingSymbol: symbol,
+          instrumentType: itype,
+          lotSize: Number(values.lot),
+          tickSize: Number(values.tick),
+        };
+    series.push({ instrument, candles: v.clean });
   });
 }
 
+const crypto = series.some((s) => s.instrument.exchange === "CRYPTO");
+if (crypto)
+  console.info(
+    "CRYPTO: 24x7 session, spot long-only, exchange fees (taker 0.1% + GST; 1% TDS reported separately)",
+  );
+setReportCurrency(series[0]?.instrument.quoteCurrency ?? "INR");
 const cfg = {
   timeframeMs: TIMEFRAME_MS[tf],
+  ...(crypto ? { session: CRYPTO_SESSION } : {}),
   initialCapital: Number(values.capital),
-  product,
-  marginFraction: Number(values.margin),
+  product: crypto && values.product === "INTRADAY" ? ("DELIVERY" as const) : product,
+  marginFraction: crypto && values.margin === "0.2" ? 1 : Number(values.margin),
   slippageBps: Number(values.slippage),
   limits: { ...DEFAULT_LIMITS, maxRiskPerTradePct: Number(values.risk) },
 };

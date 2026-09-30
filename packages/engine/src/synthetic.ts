@@ -52,3 +52,40 @@ export function syntheticSession(opts: {
   }
   return out;
 }
+
+/** 24x7 synthetic crypto candles (UTC-aligned), regime-switching. Pipeline tests only. */
+export function synthetic24x7(opts: {
+  days: number;
+  start?: number;
+  startPrice?: number;
+  timeframeMin?: number;
+  seed?: number;
+}): Candle[] {
+  const tf = (opts.timeframeMin ?? 5) * 60_000;
+  let s = (opts.seed ?? 3) >>> 0;
+  const rand = () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 2 ** 32;
+  };
+  const gauss = () => Math.sqrt(-2 * Math.log(rand() + 1e-12)) * Math.cos(2 * Math.PI * rand());
+  const bars = Math.floor((opts.days * 86_400_000) / tf);
+  const t0 = Math.floor((opts.start ?? Date.UTC(2025, 0, 1)) / tf) * tf;
+  const out: Candle[] = [];
+  let px = opts.startPrice ?? 60_000;
+  let drift = 0;
+  let vol = 0.0015;
+  for (let b = 0; b < bars; b++) {
+    if (b % 2000 === 0) {
+      const r = rand();
+      drift = r < 0.35 ? 0.0003 : r < 0.6 ? -0.0003 : 0;
+      vol = r > 0.9 ? 0.004 : 0.0015;
+    }
+    const o = px;
+    const c = o * Math.exp(drift + gauss() * vol);
+    const h = Math.max(o, c) * (1 + Math.abs(gauss()) * vol * 0.5);
+    const l = Math.min(o, c) * (1 - Math.abs(gauss()) * vol * 0.5);
+    out.push({ t: t0 + b * tf, o, h, l, c, v: 5 + Math.abs(gauss()) * 20 });
+    px = c;
+  }
+  return out;
+}

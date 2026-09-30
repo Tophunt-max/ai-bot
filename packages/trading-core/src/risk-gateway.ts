@@ -1,5 +1,7 @@
+import { canShort } from "@atb/shared-types";
 import type {
   Instrument,
+  ProductType,
   RiskCheckResult,
   RiskLimits,
   RiskState,
@@ -25,6 +27,8 @@ export interface RiskContext {
   grossExposure: number;
   minRewardRisk: number;
   maxStopDistancePct: number;
+  /** Product of the entry order; used to block impossible shorts (crypto spot, cash delivery). */
+  product?: ProductType;
 }
 
 export interface TradeProposal {
@@ -85,6 +89,13 @@ export function evaluateTrade(p: TradeProposal, c: RiskContext): RiskCheckResult
       name: "DECISION",
       fn: () =>
         p.decision === "BUY" || p.decision === "SELL" ? null : `decision ${p.decision} is not an entry`,
+    },
+    {
+      name: "SHORT_NOT_ALLOWED",
+      fn: () =>
+        p.decision === "SELL" && !canShort(p.instrument, c.product ?? "INTRADAY")
+          ? `${p.instrument.instrumentType}/${c.product ?? "INTRADAY"} cannot be sold short`
+          : null,
     },
     {
       name: "SESSION",
@@ -170,6 +181,16 @@ export function evaluateTrade(p: TradeProposal, c: RiskContext): RiskCheckResult
 
   if (size.quantity <= 0) {
     return reject("POSITION_SIZE", [...reasons, `size 0 (limited by ${size.limitedBy})`]);
+  }
+  const inst = p.instrument;
+  if (
+    (inst.minQty !== undefined && size.quantity < inst.minQty) ||
+    (inst.minNotional !== undefined && size.quantity * p.entry < inst.minNotional)
+  ) {
+    return reject("BELOW_EXCHANGE_MINIMUM", [
+      ...reasons,
+      `size ${size.quantity} below exchange minimum (qty ${inst.minQty ?? "-"}, notional ${inst.minNotional ?? "-"})`,
+    ]);
   }
   reasons.push(`POSITION_SIZE ok: ${size.quantity} (limited by ${size.limitedBy})`);
   return { approved: true, quantity: size.quantity, reasons };

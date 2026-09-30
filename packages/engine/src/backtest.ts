@@ -230,8 +230,12 @@ export function runBacktest(
       const slip = (bar.o * cfg.slippageBps) / 10_000;
       const fillPx = long ? Math.min(limit, bar.o + slip) : Math.max(limit, bar.o - slip);
       const protective = long ? pend.stop < fillPx : pend.stop > fillPx;
-      const maxQty =
-        Math.floor((bar.v * cfg.participationPct) / 100 / s.instrument.lotSize) * s.instrument.lotSize;
+      const maxQty = Number(
+        (
+          Math.floor((bar.v * cfg.participationPct) / 100 / s.instrument.lotSize + 1e-9) *
+          s.instrument.lotSize
+        ).toFixed(10),
+      );
       const qty = Math.min(pend.qty, maxQty > 0 ? maxQty : pend.qty);
       if (marketable && protective && qty > 0) {
         const fee = costOf(pend.side, qty, fillPx, k);
@@ -270,7 +274,8 @@ export function runBacktest(
     const closeTime = t + cfg.timeframeMs;
     const phase = sessionPhase(closeTime - 1, cfg.session);
     const nextBar = s.candles[i + 1];
-    const lastBarOfDay = !nextBar || toIst(nextBar.t).date !== ist.date;
+    // 24x7 markets (crypto) have no end-of-day: only the end of data counts.
+    const lastBarOfDay = !nextBar || (!cfg.session.alwaysOpen && toIst(nextBar.t).date !== ist.date);
     const st = open.get(k);
     if (st) {
       const fills = onBar(
@@ -349,6 +354,7 @@ export function runBacktest(
         grossExposure: gross,
         minRewardRisk: cfg.minRewardRisk,
         maxStopDistancePct: cfg.maxStopDistancePct,
+        product: cfg.product,
       },
     );
     signalLog.push({

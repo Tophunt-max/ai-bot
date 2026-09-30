@@ -48,7 +48,7 @@ export default function Controls() {
       </Card>
       <Card title="Mode">
         <Muted>
-          {account === "demo"
+          {account === "demo" || account === "crypto_demo"
             ? "DEMO account: always virtual money (PAPER). It can never send orders to your real broker."
             : "REAL account: SHADOW (no orders) → CANARY (small real size) → LIVE. CANARY/LIVE need the typed confirmation “ENABLE CANARY” / “ENABLE LIVE”; LIVE only from CANARY."}
         </Muted>

@@ -1,5 +1,7 @@
 import type { BrokerId, ModifyRequest, OrderRequest } from "@atb/shared-types";
 import { BrokerError, PaperBroker, type BrokerAdapter, type PaperBrokerOptions } from "@atb/trading-core";
+import type { Instrument } from "@atb/shared-types";
+import { CcxtAdapter } from "./ccxt-adapter";
 import { DhanAdapter } from "./dhan";
 import type { FetchLike } from "./http";
 import { BROKERS } from "./registry";
@@ -64,7 +66,7 @@ function required(env: BrokerEnv, key: string): string {
 export function createBroker(
   id: BrokerId,
   env: BrokerEnv,
-  opts: { fetch?: FetchLike; paper?: PaperBrokerOptions } = {},
+  opts: { fetch?: FetchLike; paper?: PaperBrokerOptions; instruments?: readonly Instrument[] } = {},
 ): BrokerAdapter {
   switch (id) {
     case "paper":
@@ -81,6 +83,17 @@ export function createBroker(
         clientId: required(env, "DHAN_CLIENT_ID"),
         accessToken: required(env, "DHAN_ACCESS_TOKEN"),
         fetch: opts.fetch,
+      });
+    case "crypto":
+      return new CcxtAdapter({
+        exchangeId: required(env, "CRYPTO_EXCHANGE"),
+        apiKey: env.CRYPTO_API_KEY,
+        secret: env.CRYPTO_API_SECRET,
+        password: env.CRYPTO_API_PASSWORD,
+        uid: env.CRYPTO_API_UID,
+        sandbox: env.CRYPTO_SANDBOX === "true",
+        quoteCurrency: env.CRYPTO_QUOTE ?? "USDT",
+        instruments: opts.instruments ?? [],
       });
     case "upstox":
       return new UpstoxAdapter({ accessToken: required(env, "UPSTOX_ACCESS_TOKEN"), fetch: opts.fetch });

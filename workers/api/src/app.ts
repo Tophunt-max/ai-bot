@@ -4,7 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import { sign } from "hono/jwt";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
-import { listBrokers } from "@atb/brokers";
+import { CCXT_VERSION, CRYPTO_EXCHANGES, listBrokers } from "@atb/brokers/catalog";
 import {
   KILL_SWITCH_TRIGGERS,
   MODEL_STATUSES,
@@ -715,6 +715,16 @@ export function createApp() {
   });
 
   authed.get("/market/brokers", (c) => c.json(listBrokers()));
+
+  /** All crypto exchanges available through CCXT (+ Indian ones without CCXT), with India status flags. */
+  authed.get("/market/crypto-exchanges", (c) =>
+    c.json({
+      ccxtVersion: CCXT_VERSION,
+      exchanges: CRYPTO_EXCHANGES,
+      disclaimer:
+        "India flags are best-effort from public reports. Verify FIU-IND registration (fiuindia.gov.in). Crypto is not SEBI-regulated; 30% tax + 1% TDS apply.",
+    }),
+  );
 
   // ------------------------------------------------------------ admin
   authed.post("/admin/kill-switch", requireOwner, async (c) => {

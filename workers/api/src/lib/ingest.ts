@@ -20,6 +20,17 @@ const str = (v: unknown, d = "") => (typeof v === "string" ? v : d);
 const json = (v: unknown) => JSON.stringify(v ?? null);
 
 function instrumentUpsert(env: Env, instrumentId: string, now: number) {
+  if (instrumentId.startsWith("CRYPTO:")) {
+    // CRYPTO:<venue>:<ccxt symbol>  e.g. CRYPTO:binance:BTC/USDT  or  CRYPTO:bybit:BTC/USDT:USDT (perp)
+    const [, venue = "unknown", ...rest] = instrumentId.split(":");
+    const symbol = rest.join(":");
+    const perp = rest.length > 1;
+    const quote = symbol.split("/")[1]?.split(":")[0] ?? null;
+    return env.DB.prepare(
+      `INSERT OR IGNORE INTO instruments (id, exchange, trading_symbol, instrument_type, lot_size, tick_size, venue, quote_currency, updated_at)
+       VALUES (?, 'CRYPTO', ?, ?, 0.00000001, 0.00000001, ?, ?, ?)`,
+    ).bind(instrumentId, symbol, perp ? "PERP" : "SPOT", venue, quote, now);
+  }
   const [exchange = "NSE", symbol = instrumentId] = instrumentId.split(":");
   const ex = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"].includes(exchange) ? exchange : "NSE";
   const type = ex === "NFO" || ex === "BFO" ? (/(CE|PE)$/.test(symbol) ? symbol.slice(-2) : "FUT") : "EQ";
@@ -260,7 +271,12 @@ export async function ingestEvents(
     }
     if (stmts.length) await env.DB.batch(stmts);
   }
-  const tag = account === "real" ? "💰 REAL" : "🧪 DEMO";
+  const tag = {
+    demo: "🧪 DEMO",
+    real: "💰 REAL",
+    crypto_demo: "🧪 CRYPTO DEMO",
+    crypto_real: "🪙 CRYPTO REAL",
+  }[account];
   for (const n of notifications) n.message = `[${tag}] ${n.message}`;
   return { inserted, duplicates, notifications, latestPositions };
 }

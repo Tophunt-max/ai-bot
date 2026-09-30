@@ -51,6 +51,8 @@ export function calculatePositionSize(i: SizingInput): SizingResult {
     }
   }
 
-  const lots = Math.max(0, Math.floor(units / i.lotSize));
-  return { quantity: lots * i.lotSize, lots, riskAmount, stopDistance, limitedBy };
+  const lots = Math.max(0, Math.floor(units / i.lotSize + 1e-9));
+  // Round away float noise for fractional (crypto) steps like 0.0001.
+  const quantity = Number((lots * i.lotSize).toFixed(10));
+  return { quantity, lots, riskAmount, stopDistance, limitedBy };
 }
