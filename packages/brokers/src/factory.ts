@@ -30,6 +30,9 @@ export class NotImplementedAdapter implements BrokerAdapter {
   async getOrders(): Promise<never> {
     this.fail();
   }
+  async findOrder(_id: string): Promise<never> {
+    this.fail();
+  }
   async placeOrder(_o: OrderRequest): Promise<never> {
     this.fail();
   }
@@ -42,6 +45,15 @@ export class NotImplementedAdapter implements BrokerAdapter {
 }
 
 export type BrokerEnv = Record<string, string | undefined>;
+
+/** Brokers whose adapter can serve LTPs for the polling market-data provider. */
+export interface QuoteCapable {
+  getLtp(instruments: readonly import("@atb/shared-types").Instrument[]): Promise<Record<string, number>>;
+}
+
+export function isQuoteCapable(b: unknown): b is QuoteCapable {
+  return typeof (b as QuoteCapable)?.getLtp === "function";
+}
 
 function required(env: BrokerEnv, key: string): string {
   const v = env[key];

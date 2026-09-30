@@ -1,0 +1,22 @@
+{
+  "name": "@atb/backtesting",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "backtest": "tsx src/cli.ts",
+    "download:kite": "tsx src/download-kite.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest --run",
+    "export-dataset": "tsx src/export-dataset.ts"
+  },
+  "dependencies": {
+    "@atb/brokers": "workspace:*",
+    "@atb/engine": "workspace:*",
+    "@atb/shared-types": "workspace:*",
+    "@atb/trading-core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0"
+  }
+}

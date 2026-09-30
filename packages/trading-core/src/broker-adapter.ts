@@ -19,6 +19,8 @@ export interface BrokerAdapter {
   getBalance(): Promise<Balance>;
   getPositions(): Promise<Position[]>;
   getOrders(): Promise<Order[]>;
+  /** Look up an order by OUR idempotency key (adapters map it to tags/correlation ids). */
+  findOrder(clientOrderId: string): Promise<Order | undefined>;
   placeOrder(order: OrderRequest): Promise<OrderResult>;
   modifyOrder(brokerOrderId: string, request: ModifyRequest): Promise<OrderResult>;
   cancelOrder(brokerOrderId: string): Promise<void>;

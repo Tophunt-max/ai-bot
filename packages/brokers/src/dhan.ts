@@ -1,6 +1,7 @@
 import type {
   Balance,
   Exchange,
+  Instrument,
   ModifyRequest,
   Order,
   OrderRequest,
@@ -180,6 +181,21 @@ export class DhanAdapter implements BrokerAdapter {
     return (await this.get<DhanOrder[]>("/orders")).map((o) => this.toOrder(o));
   }
 
+  async findOrder(clientOrderId: string): Promise<Order | undefined> {
+    const correlationId = await shortTag(clientOrderId);
+    const r = await request<DhanOrder | DhanOrder[]>(
+      this.cfg,
+      `${this.base}/orders/external/${correlationId}`,
+      {
+        method: "GET",
+        headers: this.headers(),
+      },
+    );
+    if (r.status !== 200) return undefined;
+    const found = Array.isArray(r.body) ? r.body[0] : r.body;
+    return found?.orderId ? this.toOrder(found, clientOrderId) : undefined;
+  }
+
   async placeOrder(req: OrderRequest): Promise<OrderResult> {
     const securityId = req.instrument.brokerTokens?.dhan;
     if (!securityId) throw new BrokerError(`no Dhan securityId for ${req.instrument.id}`, "REJECTED");
@@ -253,5 +269,24 @@ export class DhanAdapter implements BrokerAdapter {
       headers: this.headers(),
     });
     this.check(r.status, r.body);
+  }
+
+  async getLtp(instruments: readonly Instrument[]): Promise<Record<string, number>> {
+    const keyed = instruments.filter((i) => i.brokerTokens?.dhan);
+    if (keyed.length === 0) return {};
+    const req: Record<string, number[]> = {};
+    for (const i of keyed) (req[SEGMENT[i.exchange]] ??= []).push(Number(i.brokerTokens!.dhan));
+    const r = await request<{ data?: Record<string, Record<string, { last_price: number }>> }>(
+      this.cfg,
+      `${this.base}/marketfeed/ltp`,
+      { method: "POST", headers: this.headers(), body: JSON.stringify(req) },
+    );
+    const d = this.check(r.status, r.body).data ?? {};
+    const out: Record<string, number> = {};
+    for (const i of keyed) {
+      const px = d[SEGMENT[i.exchange]]?.[i.brokerTokens!.dhan!]?.last_price;
+      if (px && px > 0) out[i.id] = px;
+    }
+    return out;
   }
 }

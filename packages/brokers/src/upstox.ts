@@ -1,5 +1,6 @@
 import type {
   Balance,
+  Instrument,
   ModifyRequest,
   Order,
   OrderRequest,
@@ -179,6 +180,12 @@ export class UpstoxAdapter implements BrokerAdapter {
     return (await this.get<UpstoxOrder[]>("/order/retrieve-all")).map((o) => this.toOrder(o));
   }
 
+  async findOrder(clientOrderId: string): Promise<Order | undefined> {
+    const tag = await shortTag(clientOrderId);
+    const o = (await this.get<UpstoxOrder[]>("/order/retrieve-all")).find((x) => x.tag === tag);
+    return o ? { ...this.toOrder(o), clientOrderId } : undefined;
+  }
+
   async placeOrder(req: OrderRequest): Promise<OrderResult> {
     const token = req.instrument.brokerTokens?.upstox;
     if (!token) throw new BrokerError(`no Upstox instrument_token for ${req.instrument.id}`, "REJECTED");
@@ -239,5 +246,21 @@ export class UpstoxAdapter implements BrokerAdapter {
       { method: "DELETE", mutating: true, headers: this.headers() },
     );
     this.unwrap(r.status, r.body);
+  }
+
+  async getLtp(instruments: readonly Instrument[]): Promise<Record<string, number>> {
+    const keyed = instruments.filter((i) => i.brokerTokens?.upstox);
+    if (keyed.length === 0) return {};
+    const keys = keyed.map((i) => encodeURIComponent(i.brokerTokens!.upstox!)).join(",");
+    const d = await this.get<Record<string, { last_price: number; instrument_token: string }>>(
+      `/market-quote/ltp?instrument_key=${keys}`,
+    );
+    const byToken = new Map(Object.values(d).map((q) => [q.instrument_token, q.last_price]));
+    const out: Record<string, number> = {};
+    for (const i of keyed) {
+      const px = byToken.get(i.brokerTokens!.upstox!);
+      if (px && px > 0) out[i.id] = px;
+    }
+    return out;
   }
 }

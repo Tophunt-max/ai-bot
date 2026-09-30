@@ -134,10 +134,12 @@ export function evaluateTrade(p: TradeProposal, c: RiskContext): RiskCheckResult
     {
       name: "TAKE_PROFIT",
       fn: () => {
-        const tp1 = p.targets[0];
-        if (tp1 === undefined) return "no target";
-        if (isLong ? tp1 <= p.entry : tp1 >= p.entry) return "target on wrong side of entry";
-        const rr = Math.abs(tp1 - p.entry) / Math.abs(p.entry - p.stop);
+        if (p.targets.length === 0) return "no target";
+        if (p.targets.some((t) => (isLong ? t <= p.entry : t >= p.entry)))
+          return "target on wrong side of entry";
+        // TP1 is a partial/break-even level; reward/risk is judged on the primary target (TP2 when present).
+        const primary = p.targets[p.targets.length > 1 ? 1 : 0]!;
+        const rr = Math.abs(primary - p.entry) / Math.abs(p.entry - p.stop);
         return rr >= c.minRewardRisk ? null : `reward/risk ${rr.toFixed(2)} < ${c.minRewardRisk}`;
       },
     },

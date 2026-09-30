@@ -20,3 +20,5 @@ __pycache__/
 !*.tfvars.example
 models/artifacts/
 .DS_Store
+backtest-output/
+data/

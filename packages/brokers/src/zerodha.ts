@@ -1,5 +1,7 @@
 import type {
   Balance,
+  Candle,
+  Instrument,
   ModifyRequest,
   Order,
   OrderRequest,
@@ -7,6 +9,7 @@ import type {
   OrderStatus,
   Position,
   ProductType,
+  Timeframe,
 } from "@atb/shared-types";
 import { BrokerError, type BrokerAdapter } from "@atb/trading-core";
 import { form, request, sha256Hex, shortTag, type HttpOptions } from "./http";
@@ -190,6 +193,12 @@ export class ZerodhaAdapter implements BrokerAdapter {
     };
   }
 
+  async findOrder(clientOrderId: string): Promise<Order | undefined> {
+    const tag = await shortTag(clientOrderId);
+    const o = (await this.get<KiteOrder[]>("/orders")).find((x) => x.tag === tag);
+    return o ? { ...this.toOrder(o), clientOrderId } : undefined;
+  }
+
   async placeOrder(req: OrderRequest): Promise<OrderResult> {
     const tag = await shortTag(req.clientOrderId);
     // Idempotency: Kite has no client order id, so we look up our deterministic tag first.
@@ -249,4 +258,63 @@ export class ZerodhaAdapter implements BrokerAdapter {
     );
     this.unwrap(body);
   }
+
+  /** LTP for up to ~1000 instruments per call. Keyed by our instrument id. */
+  async getLtp(instruments: readonly Instrument[]): Promise<Record<string, number>> {
+    if (instruments.length === 0) return {};
+    const qs = instruments
+      .map((i) => `i=${encodeURIComponent(`${i.exchange}:${i.tradingSymbol}`)}`)
+      .join("&");
+    const d = await this.get<Record<string, { last_price: number }>>(`/quote/ltp?${qs}`);
+    const out: Record<string, number> = {};
+    for (const i of instruments) {
+      const q = d[`${i.exchange}:${i.tradingSymbol}`];
+      if (q && q.last_price > 0) out[i.id] = q.last_price;
+    }
+    return out;
+  }
+
+  /**
+   * Historical candles (requires Kite's historical-data add-on). Chunked to Kite's per-request
+   * limits. `instrumentToken` is Kite's numeric token (instrument.brokerTokens.zerodha).
+   */
+  async getHistorical(
+    instrumentToken: string,
+    timeframe: Timeframe,
+    from: Date,
+    to: Date,
+  ): Promise<Candle[]> {
+    const interval = KITE_INTERVAL[timeframe];
+    if (!interval) throw new BrokerError(`timeframe ${timeframe} not supported by Kite`, "REJECTED");
+    const maxDays = KITE_MAX_DAYS[interval] ?? 60;
+    const out: Candle[] = [];
+    const fmt = (d: Date) => {
+      const ist = new Date(d.getTime() + 330 * 60_000).toISOString();
+      return `${ist.slice(0, 10)}+${ist.slice(11, 19)}`;
+    };
+    for (let start = from.getTime(); start < to.getTime(); start += maxDays * 86_400_000) {
+      const end = Math.min(to.getTime(), start + maxDays * 86_400_000 - 1000);
+      const d = await this.get<{ candles: Array<[string, number, number, number, number, number]> }>(
+        `/instruments/historical/${encodeURIComponent(instrumentToken)}/${interval}?from=${fmt(new Date(start))}&to=${fmt(new Date(end))}`,
+      );
+      for (const [ts, o, h, l, c, v] of d.candles) out.push({ t: Date.parse(ts), o, h, l, c, v });
+    }
+    return out;
+  }
 }
+
+const KITE_INTERVAL: Partial<Record<Timeframe, string>> = {
+  "1m": "minute",
+  "5m": "5minute",
+  "15m": "15minute",
+  "1h": "60minute",
+  "1d": "day",
+};
+// Kite per-request lookback limits (days) by interval.
+const KITE_MAX_DAYS: Record<string, number> = {
+  minute: 60,
+  "5minute": 100,
+  "15minute": 200,
+  "60minute": 400,
+  day: 2000,
+};

@@ -3,6 +3,7 @@ packages:
   - "workers/*"
   - "services/*"
   - "packages/*"
+  - "backtesting"
 
 allowBuilds:
   esbuild: true

@@ -190,3 +190,52 @@ describe("upstox", () => {
     await expect(u.placeOrder(noToken)).rejects.toMatchObject({ code: "REJECTED" });
   });
 });
+
+describe("quotes & history", () => {
+  it("zerodha getLtp maps exchange:symbol back to instrument ids", async () => {
+    const { fetch, calls } = mockFetch([
+      (c) =>
+        c.url.includes("/quote/ltp")
+          ? json({ status: "success", data: { "NSE:INFY": { last_price: 1510.5 } } })
+          : undefined,
+    ]);
+    const z = new ZerodhaAdapter({ apiKey: "k", accessToken: "t", fetch });
+    expect(await z.getLtp([inst])).toEqual({ "NSE:INFY": 1510.5 });
+    expect(calls[0]!.url).toContain("i=NSE%3AINFY");
+  });
+
+  it("zerodha historical chunks requests to the interval limit", async () => {
+    const { fetch, calls } = mockFetch([
+      (c) =>
+        c.url.includes("/instruments/historical/")
+          ? json({
+              status: "success",
+              data: { candles: [["2025-01-01T09:15:00+0530", 1, 2, 0.5, 1.5, 100]] },
+            })
+          : undefined,
+    ]);
+    const z = new ZerodhaAdapter({ apiKey: "k", accessToken: "t", fetch });
+    const c = await z.getHistorical("408065", "5m", new Date("2025-01-01"), new Date("2025-08-01"));
+    expect(calls.length).toBe(3); // 212 days / 100-day chunks
+    expect(c[0]).toMatchObject({ o: 1, h: 2, l: 0.5, c: 1.5, v: 100 });
+  });
+
+  it("dhan and upstox getLtp use broker tokens", async () => {
+    const d = mockFetch([
+      () => json({ data: { NSE_EQ: { "1594": { last_price: 1500 } } }, status: "success" }),
+    ]);
+    expect(await new DhanAdapter({ clientId: "C", accessToken: "T", fetch: d.fetch }).getLtp([inst])).toEqual(
+      { "NSE:INFY": 1500 },
+    );
+    const u = mockFetch([
+      () =>
+        json({
+          status: "success",
+          data: { "NSE_EQ:INFY": { last_price: 1501, instrument_token: "NSE_EQ|INE009A01021" } },
+        }),
+    ]);
+    expect(await new UpstoxAdapter({ accessToken: "T", fetch: u.fetch }).getLtp([inst])).toEqual({
+      "NSE:INFY": 1501,
+    });
+  });
+});

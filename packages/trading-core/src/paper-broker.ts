@@ -52,6 +52,11 @@ export class PaperBroker implements BrokerAdapter {
     return [...this.orders.values()];
   }
 
+  async findOrder(clientOrderId: string): Promise<Order | undefined> {
+    const id = this.byClientId.get(clientOrderId);
+    return id ? { ...this.orders.get(id)! } : undefined;
+  }
+
   async placeOrder(req: OrderRequest): Promise<OrderResult> {
     const existing = this.byClientId.get(req.clientOrderId);
     if (existing) return this.toResult(this.orders.get(existing)!);

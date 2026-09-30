@@ -103,6 +103,25 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
 
+  backtesting:
+    dependencies:
+      '@atb/brokers':
+        specifier: workspace:*
+        version: link:../packages/brokers
+      '@atb/engine':
+        specifier: workspace:*
+        version: link:../packages/engine
+      '@atb/shared-types':
+        specifier: workspace:*
+        version: link:../packages/shared-types
+      '@atb/trading-core':
+        specifier: workspace:*
+        version: link:../packages/trading-core
+    devDependencies:
+      tsx:
+        specifier: ^4.20.0
+        version: 4.23.15
+
   packages/api-client:
     dependencies:
       '@atb/shared-types':
@@ -110,6 +129,15 @@ importers:
         version: link:../shared-types
 
   packages/brokers:
+    dependencies:
+      '@atb/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+      '@atb/trading-core':
+        specifier: workspace:*
+        version: link:../trading-core
+
+  packages/engine:
     dependencies:
       '@atb/shared-types':
         specifier: workspace:*
@@ -140,6 +168,9 @@ importers:
       '@atb/brokers':
         specifier: workspace:*
         version: link:../../packages/brokers
+      '@atb/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
       '@atb/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
