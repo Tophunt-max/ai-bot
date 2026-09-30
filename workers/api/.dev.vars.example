@@ -1,0 +1,7 @@
+# Copy to .dev.vars for `wrangler dev` (git-ignored).
+JWT_SECRET=change-me-to-64-random-hex-chars
+OWNER_PASSWORD_HASH=pbkdf2$100000$...$...
+GATEWAY_HMAC_SECRET=change-me-to-64-random-hex-chars
+AI_SERVICE_SECRET=change-me
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=

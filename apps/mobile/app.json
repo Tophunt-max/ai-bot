@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "AI Trading Bot",
+    "slug": "ai-trading-bot-v3",
+    "scheme": "atb",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.personal.atb" },
+    "android": { "package": "com.personal.atb" },
+    "web": { "bundler": "metro", "output": "single" },
+    "plugins": ["expo-router", "expo-secure-store", "expo-notifications"],
+    "experiments": { "typedRoutes": true },
+    "extra": {
+      "apiBaseUrl": "http://localhost:8787"
+    }
+  }
+}

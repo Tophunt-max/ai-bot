@@ -1,0 +1,54 @@
+# Runs on EACH gateway VM (Azure primary + DO secondary). Only the node holding the
+# execution lease (granted by the Cloudflare TradingAccountDO) may send orders; the other
+# stays hot-standby automatically.
+#   cd /opt/atb && docker compose -f docker-compose.prod.yml --env-file .env up -d
+name: atb
+
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:-ghcr.io/OWNER/atb-gateway:latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      AI_SERVICE_URL: http://ai-service:8000
+    # No published ports: reachable only through cloudflared on the internal network.
+    expose: ["8080"]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/nodejs/bin/node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    logging: &logging
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  ai-service:
+    image: ${AI_IMAGE:-ghcr.io/OWNER/atb-ai-service:latest}
+    restart: unless-stopped
+    environment:
+      AI_SERVICE_SECRET: ${AI_SERVICE_SECRET}
+    expose: ["8000"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    logging: *logging
+
+  # Outbound-only tunnel to Cloudflare: no inbound firewall port needed.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on: [gateway]
+    logging: *logging

@@ -1,0 +1,102 @@
+import { toIst } from "@atb/trading-core";
+import { app } from "./app";
+import type { Env } from "./env";
+import { OWNER_ACCOUNT } from "./env";
+
+export { TradingAccountDO } from "./do/trading-account";
+export { RiskManagerDO } from "./do/risk-manager";
+export { PositionManagerDO } from "./do/position-manager";
+export { OrderManagerDO } from "./do/order-manager";
+export { RealtimeSessionDO } from "./do/realtime-session";
+
+/** Cron jobs are at-least-once: guard each (job, runKey) with a unique row in D1. */
+async function once(env: Env, job: string, runKey: string, fn: () => Promise<void>): Promise<void> {
+  const claim = await env.DB.prepare(
+    "INSERT OR IGNORE INTO cron_runs (job, run_key, started_at, status) VALUES (?, ?, ?, 'RUNNING')",
+  )
+    .bind(job, runKey, Date.now())
+    .run();
+  if (!claim.meta.changes) return; // already ran (or running)
+  try {
+    await fn();
+    await env.DB.prepare("UPDATE cron_runs SET status='DONE', finished_at=? WHERE job=? AND run_key=?")
+      .bind(Date.now(), job, runKey)
+      .run();
+  } catch (e) {
+    await env.DB.prepare("UPDATE cron_runs SET status='FAILED', finished_at=? WHERE job=? AND run_key=?")
+      .bind(Date.now(), job, runKey)
+      .run();
+    throw e;
+  }
+}
+
+export default {
+  fetch: app.fetch,
+
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const ist = toIst(controller.scheduledTime);
+    const risk = env.RISK_MANAGER.get(env.RISK_MANAGER.idFromName(OWNER_ACCOUNT));
+    const account = env.TRADING_ACCOUNT.get(env.TRADING_ACCOUNT.idFromName(OWNER_ACCOUNT));
+
+    switch (controller.cron) {
+      case "30 0 * * *":
+        await once(env, "daily-risk-reset", ist.date, async () => {
+          await risk.dailyReset(ist.date, ist.weekday === 1);
+        });
+        break;
+      case "45 2 * * 1-5":
+        await once(env, "session-prep", ist.date, async () => {
+          // Phase 4+: refresh instruments/holidays, verify broker session via gateway.
+          await env.Q_ANALYTICS.send({ type: "SESSION_PREP", date: ist.date });
+        });
+        break;
+      case "*/5 3-10 * * 1-5": {
+        // Gateway liveness: no fresh lease => block new trades (fail closed).
+        const s = await account.getState();
+        if (!s.lease || s.lease.expiresAt < Date.now() - 60_000) {
+          const snap = await risk.getSnapshot();
+          if (!snap.state.tradingLocked) {
+            await risk.lock("SYSTEM_FAILURE");
+            ctx.waitUntil(
+              env.Q_NOTIFICATIONS.send({
+                event: "BROKER_ERROR",
+                message: "Execution gateway heartbeat lost",
+              }),
+            );
+          }
+        }
+        break;
+      }
+      case "30 10 * * 1-5":
+        await once(env, "daily-report", ist.date, async () => {
+          await env.Q_ANALYTICS.send({ type: "DAILY_REPORT", date: ist.date });
+        });
+        break;
+    }
+  },
+
+  async queue(batch: MessageBatch<Record<string, unknown>>, env: Env): Promise<void> {
+    for (const msg of batch.messages) {
+      try {
+        if (batch.queue.endsWith("notifications")) {
+          await sendTelegram(env, String(msg.body.message ?? msg.body.event ?? "event"));
+        }
+        // trade-events / signal-processing consumers are implemented in later phases.
+        msg.ack();
+      } catch (e) {
+        console.error(JSON.stringify({ level: "error", queue: batch.queue, err: String(e) }));
+        msg.retry();
+      }
+    }
+  },
+} satisfies ExportedHandler<Env, Record<string, unknown>>;
+
+async function sendTelegram(env: Env, text: string): Promise<void> {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+  const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: `[ATB] ${text}` }),
+  });
+  if (!r.ok) throw new Error(`telegram HTTP ${r.status}`);
+}

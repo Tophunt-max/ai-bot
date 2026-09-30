@@ -1,0 +1,44 @@
+# Local development stack (PAPER only):
+#   docker compose -f docker-compose.dev.yml up --build
+# The Cloudflare Worker runs separately with `pnpm dev:api` (wrangler dev on :8787).
+name: atb-dev
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    environment:
+      POSTGRES_USER: atb
+      POSTGRES_PASSWORD: atb
+      POSTGRES_DB: atb_market
+    ports: ["5432:5432"]
+    volumes:
+      - tsdb:/var/lib/postgresql/data
+      - ./database/timescale:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atb -d atb_market"]
+      interval: 5s
+      retries: 10
+
+  ai-service:
+    build: ./ai-service
+    environment:
+      AI_SERVICE_SECRET: dev-ai-secret-0123456789abcdef0123456789
+    ports: ["8000:8000"]
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/execution-gateway/Dockerfile
+    environment:
+      GATEWAY_NODE_ID: local-dev
+      GATEWAY_PORT: "8080"
+      CONTROL_PLANE_URL: http://host.docker.internal:8787
+      GATEWAY_HMAC_SECRET: dev-gateway-secret-0123456789abcdef012345
+      ACTIVE_BROKER: paper
+      AI_SERVICE_URL: http://ai-service:8000
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["8080:8080"]
+    depends_on: [ai-service]
+
+volumes:
+  tsdb:

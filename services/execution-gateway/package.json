@@ -1,0 +1,26 @@
+{
+  "name": "@atb/execution-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/main.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@atb/brokers": "workspace:*",
+    "@atb/shared-types": "workspace:*",
+    "@atb/trading-core": "workspace:*",
+    "@atb/validation": "workspace:*",
+    "@hono/node-server": "^2.1.3",
+    "hono": "^4.13.11",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "tsx": "^4.20.0"
+  }
+}

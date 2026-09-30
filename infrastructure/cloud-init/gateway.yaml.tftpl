@@ -1,0 +1,100 @@
+#cloud-config
+# Execution Gateway host bootstrap (Ubuntu 24.04). Rendered by Terraform templatefile():
+# Only brace-style placeholders are Terraform vars; shell vars below use the plain $VAR form.
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - jq
+  - ufw
+  - fail2ban
+  - chrony
+  - unattended-upgrades
+
+users:
+  - name: ${admin_username}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+timezone: Asia/Kolkata
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-atb-hardening.conf
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+      MaxAuthTries 3
+      AllowUsers ${admin_username}
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+  # Accurate clocks matter: HMAC replay windows, IST session rules, order timestamps.
+  - path: /etc/chrony/conf.d/atb.conf
+    permissions: "0644"
+    content: |
+      server time.cloudflare.com iburst nts
+      makestep 1.0 3
+
+  - path: /opt/atb/node-id
+    permissions: "0644"
+    content: "${node_id}\n"
+
+  # DigitalOcean only: send ALL outbound traffic via the Reserved IP's anchor gateway so the
+  # broker sees the whitelisted Reserved IP. No-op on other providers.
+  - path: /usr/local/sbin/atb-reserved-ip-egress.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      [ "${provider_name}" = "digitalocean" ] || exit 0
+      MD=http://169.254.169.254/metadata/v1
+      for i in $(seq 1 30); do
+        GW=$(curl -fsS "$MD/interfaces/public/0/anchor_ipv4/gateway" || true)
+        [ -n "$GW" ] && break
+        sleep 2
+      done
+      [ -n "$GW" ] || { echo "no anchor gateway in metadata" >&2; exit 1; }
+      ip route replace default via "$GW" dev eth0
+      echo "default route via anchor gateway $GW"
+
+  - path: /etc/systemd/system/atb-reserved-ip-egress.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Route outbound traffic via DigitalOcean Reserved IP (broker whitelist)
+      After=network-online.target
+      Wants=network-online.target
+      Before=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/atb-reserved-ip-egress.sh
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [bash, -c, "curl -fsSL https://get.docker.com | sh"]
+  - [usermod, -aG, docker, "${admin_username}"]
+  - [mkdir, -p, /opt/atb]
+  - [chown, -R, "${admin_username}:${admin_username}", /opt/atb]
+  - [ufw, default, deny, incoming]
+  - [ufw, default, allow, outgoing]
+  - [ufw, allow, "22/tcp"]
+  - [ufw, --force, enable]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, atb-reserved-ip-egress.service]
+  - [systemctl, restart, ssh]
+  - [systemctl, enable, --now, fail2ban]
+  - [systemctl, restart, chrony]

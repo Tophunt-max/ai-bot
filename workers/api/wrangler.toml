@@ -1,0 +1,282 @@
+#:schema ../../node_modules/wrangler/config-schema.json
+# AI Trading Bot V3 — Cloudflare control plane.
+# Top level = development (PAPER only). [env.staging] = PAPER+SHADOW. [env.production] = all modes.
+# Bindings are NOT inherited by envs in wrangler, so each env repeats them.
+# Secrets (never in this file): JWT_SECRET, OWNER_PASSWORD_HASH, GATEWAY_HMAC_SECRET, AI_SERVICE_SECRET,
+#   TELEGRAM_BOT_TOKEN, EXPO_ACCESS_TOKEN, SENTRY_DSN  ->  `wrangler secret put NAME --env <env>`
+
+name = "atb-api-dev"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "development"
+OWNER_EMAIL = "owner@example.com"
+GATEWAY_URL = "http://localhost:8080"
+AI_SERVICE_URL = "http://localhost:8000"
+CORS_ORIGINS = "http://localhost:8081,http://localhost:19006"
+MAX_DATA_STALENESS_MS = "5000"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "atb-dev"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../../database/migrations"
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "atb-artifacts-dev"
+
+[[kv_namespaces]]
+binding = "CACHE"            # cache / ephemeral only — never trading state
+id = "00000000000000000000000000000000"
+
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+[[ratelimits]]
+name = "TRADING_RATE_LIMITER"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
+
+[durable_objects]
+bindings = [
+  { name = "TRADING_ACCOUNT", class_name = "TradingAccountDO" },
+  { name = "RISK_MANAGER", class_name = "RiskManagerDO" },
+  { name = "POSITION_MANAGER", class_name = "PositionManagerDO" },
+  { name = "ORDER_MANAGER", class_name = "OrderManagerDO" },
+  { name = "REALTIME", class_name = "RealtimeSessionDO" },
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TradingAccountDO", "RiskManagerDO", "PositionManagerDO", "OrderManagerDO", "RealtimeSessionDO"]
+
+[[queues.producers]]
+binding = "Q_MARKET_DATA"
+queue = "atb-dev-market-data-processing"
+[[queues.producers]]
+binding = "Q_SIGNALS"
+queue = "atb-dev-signal-processing"
+[[queues.producers]]
+binding = "Q_TRADE_EVENTS"
+queue = "atb-dev-trade-events"
+[[queues.producers]]
+binding = "Q_NOTIFICATIONS"
+queue = "atb-dev-notifications"
+[[queues.producers]]
+binding = "Q_BACKTESTS"
+queue = "atb-dev-backtest-jobs"
+[[queues.producers]]
+binding = "Q_MODEL_EVAL"
+queue = "atb-dev-model-evaluation"
+[[queues.producers]]
+binding = "Q_ANALYTICS"
+queue = "atb-dev-analytics-jobs"
+
+[[queues.consumers]]
+queue = "atb-dev-trade-events"
+max_batch_size = 10
+max_retries = 5
+dead_letter_queue = "atb-dev-dlq"
+[[queues.consumers]]
+queue = "atb-dev-notifications"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "atb-dev-dlq"
+[[queues.consumers]]
+queue = "atb-dev-signal-processing"
+max_batch_size = 5
+max_retries = 2
+dead_letter_queue = "atb-dev-dlq"
+
+[triggers]
+# UTC. IST = UTC+5:30.
+crons = [
+  "45 2 * * 1-5",      # 08:15 IST  session preparation (holidays, instruments, broker session check)
+  "*/5 3-10 * * 1-5",  # every 5m ~08:30-16:25 IST  broker reconciliation + stale orders
+  "30 10 * * 1-5",     # 16:00 IST  daily statistics & reports
+  "30 0 * * *",        # 06:00 IST  daily risk reset + model health checks
+]
+
+# ------------------------------------------------------------------ staging
+[env.staging]
+name = "atb-api-staging"
+workers_dev = false
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+OWNER_EMAIL = "owner@example.com"
+GATEWAY_URL = "https://gateway-staging.example.com"
+AI_SERVICE_URL = "https://gateway-staging.example.com/ai"
+CORS_ORIGINS = "https://app-staging.example.com"
+MAX_DATA_STALENESS_MS = "5000"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "atb-staging"
+database_id = "00000000-0000-0000-0000-000000000001"
+migrations_dir = "../../database/migrations"
+
+[[env.staging.r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "atb-artifacts-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "CACHE"
+id = "00000000000000000000000000000001"
+
+[[env.staging.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "2001"
+simple = { limit = 60, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "TRADING_RATE_LIMITER"
+namespace_id = "2002"
+simple = { limit = 10, period = 60 }
+
+[env.staging.durable_objects]
+bindings = [
+  { name = "TRADING_ACCOUNT", class_name = "TradingAccountDO" },
+  { name = "RISK_MANAGER", class_name = "RiskManagerDO" },
+  { name = "POSITION_MANAGER", class_name = "PositionManagerDO" },
+  { name = "ORDER_MANAGER", class_name = "OrderManagerDO" },
+  { name = "REALTIME", class_name = "RealtimeSessionDO" },
+]
+
+[[env.staging.queues.producers]]
+binding = "Q_MARKET_DATA"
+queue = "atb-staging-market-data-processing"
+[[env.staging.queues.producers]]
+binding = "Q_SIGNALS"
+queue = "atb-staging-signal-processing"
+[[env.staging.queues.producers]]
+binding = "Q_TRADE_EVENTS"
+queue = "atb-staging-trade-events"
+[[env.staging.queues.producers]]
+binding = "Q_NOTIFICATIONS"
+queue = "atb-staging-notifications"
+[[env.staging.queues.producers]]
+binding = "Q_BACKTESTS"
+queue = "atb-staging-backtest-jobs"
+[[env.staging.queues.producers]]
+binding = "Q_MODEL_EVAL"
+queue = "atb-staging-model-evaluation"
+[[env.staging.queues.producers]]
+binding = "Q_ANALYTICS"
+queue = "atb-staging-analytics-jobs"
+
+[[env.staging.queues.consumers]]
+queue = "atb-staging-trade-events"
+max_batch_size = 10
+max_retries = 5
+dead_letter_queue = "atb-staging-dlq"
+[[env.staging.queues.consumers]]
+queue = "atb-staging-notifications"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "atb-staging-dlq"
+[[env.staging.queues.consumers]]
+queue = "atb-staging-signal-processing"
+max_batch_size = 5
+max_retries = 2
+dead_letter_queue = "atb-staging-dlq"
+
+[env.staging.triggers]
+crons = ["45 2 * * 1-5", "*/5 3-10 * * 1-5", "30 10 * * 1-5", "30 0 * * *"]
+
+# ------------------------------------------------------------------ production
+[env.production]
+name = "atb-api"
+workers_dev = false
+# routes = [{ pattern = "api.yourdomain.com", custom_domain = true }]
+
+[env.production.vars]
+ENVIRONMENT = "production"
+OWNER_EMAIL = "owner@example.com"
+GATEWAY_URL = "https://gateway.example.com"
+AI_SERVICE_URL = "https://gateway.example.com/ai"
+CORS_ORIGINS = "https://app.example.com"
+MAX_DATA_STALENESS_MS = "5000"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "atb-production"
+database_id = "00000000-0000-0000-0000-000000000002"
+migrations_dir = "../../database/migrations"
+
+[[env.production.r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "atb-artifacts"
+
+[[env.production.kv_namespaces]]
+binding = "CACHE"
+id = "00000000000000000000000000000002"
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "3001"
+simple = { limit = 60, period = 60 }
+
+[[env.production.ratelimits]]
+name = "TRADING_RATE_LIMITER"
+namespace_id = "3002"
+simple = { limit = 10, period = 60 }
+
+[env.production.durable_objects]
+bindings = [
+  { name = "TRADING_ACCOUNT", class_name = "TradingAccountDO" },
+  { name = "RISK_MANAGER", class_name = "RiskManagerDO" },
+  { name = "POSITION_MANAGER", class_name = "PositionManagerDO" },
+  { name = "ORDER_MANAGER", class_name = "OrderManagerDO" },
+  { name = "REALTIME", class_name = "RealtimeSessionDO" },
+]
+
+[[env.production.queues.producers]]
+binding = "Q_MARKET_DATA"
+queue = "atb-market-data-processing"
+[[env.production.queues.producers]]
+binding = "Q_SIGNALS"
+queue = "atb-signal-processing"
+[[env.production.queues.producers]]
+binding = "Q_TRADE_EVENTS"
+queue = "atb-trade-events"
+[[env.production.queues.producers]]
+binding = "Q_NOTIFICATIONS"
+queue = "atb-notifications"
+[[env.production.queues.producers]]
+binding = "Q_BACKTESTS"
+queue = "atb-backtest-jobs"
+[[env.production.queues.producers]]
+binding = "Q_MODEL_EVAL"
+queue = "atb-model-evaluation"
+[[env.production.queues.producers]]
+binding = "Q_ANALYTICS"
+queue = "atb-analytics-jobs"
+
+[[env.production.queues.consumers]]
+queue = "atb-trade-events"
+max_batch_size = 10
+max_retries = 5
+dead_letter_queue = "atb-dlq"
+[[env.production.queues.consumers]]
+queue = "atb-notifications"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "atb-dlq"
+[[env.production.queues.consumers]]
+queue = "atb-signal-processing"
+max_batch_size = 5
+max_retries = 2
+dead_letter_queue = "atb-dlq"
+
+[env.production.triggers]
+crons = ["45 2 * * 1-5", "*/5 3-10 * * 1-5", "30 10 * * 1-5", "30 0 * * *"]

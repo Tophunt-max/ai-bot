@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Worker bundle + config validation
+        run: pnpm --filter @atb/api exec wrangler deploy --dry-run --outdir dist --env production
+      - name: D1 migrations apply cleanly
+        run: pnpm --filter @atb/api exec wrangler d1 migrations apply DB --local
+        env:
+          CI: "1"
+      - name: Gateway bundle
+        run: pnpm --filter @atb/execution-gateway run build
+
+  ai-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv -p 3.12 .venv && uv pip install -p .venv -e ".[dev]"
+      - run: .venv/bin/ruff check . && .venv/bin/ruff format --check .
+      - run: .venv/bin/pytest -q
+
+  terraform:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [azure-central-india, digitalocean-bangalore]
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate

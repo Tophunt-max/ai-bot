@@ -1,0 +1,32 @@
+{
+  "name": "ai-trading-bot-v3",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Personal autonomous AI trading platform for Indian markets. Risk-first. No guaranteed profit.",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' run build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "eslint .",
+    "test": "pnpm -r --filter '!@atb/mobile' run test",
+    "format": "prettier --write .",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "db:migrate:local": "pnpm --filter @atb/api run db:migrate:local",
+    "dev:api": "pnpm --filter @atb/api run dev",
+    "dev:gateway": "pnpm --filter @atb/execution-gateway run dev",
+    "dev:mobile": "pnpm --filter @atb/mobile run start"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.39.0",
+    "globals": "^16.0.0",
+    "prettier": "^3.6.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^4.1.11"
+  }
+}
