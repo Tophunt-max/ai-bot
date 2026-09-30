@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
-import { createBroker, isQuoteCapable, ZerodhaAdapter } from "@atb/brokers";
+import { CcxtAdapter, createBroker, isQuoteCapable, ZerodhaAdapter } from "@atb/brokers";
 import {
   PollingProvider,
   ReplayProvider,
@@ -10,7 +10,7 @@ import {
   type MarketDataProvider,
 } from "@atb/engine";
 import type { AccountId } from "@atb/shared-types";
-import { PaperBroker, type BrokerAdapter } from "@atb/trading-core";
+import { CRYPTO_SESSION, PaperBroker, type BrokerAdapter } from "@atb/trading-core";
 import { AiClient } from "./ai-client";
 import { loadConfig } from "./config";
 import { HttpControlPlane } from "./control-plane";
@@ -36,9 +36,14 @@ let replayWallAt = Date.now();
 const engineNow = cfg.REPLAY_CSV ? () => replayClock : Date.now;
 const limiterNow = cfg.REPLAY_CSV ? () => replayClock + (Date.now() - replayWallAt) : undefined;
 
+const crypto = cfg.MARKET === "CRYPTO";
+const [DEMO, REAL]: [AccountId, AccountId] = crypto ? ["crypto_demo", "crypto_real"] : ["demo", "real"];
+
 // The REAL broker is only created when one is configured. DEMO never gets a reference to it.
 const realBroker: BrokerAdapter | null =
-  cfg.ACTIVE_BROKER === "paper" ? null : createBroker(cfg.ACTIVE_BROKER, process.env);
+  cfg.ACTIVE_BROKER === "paper"
+    ? null
+    : createBroker(cfg.ACTIVE_BROKER, process.env, { instruments: cfg.instruments });
 
 // ---- market data (read-only; allowed from any IP) — ONE feed shared by both books
 function buildProvider(): MarketDataProvider {
@@ -47,6 +52,32 @@ function buildProvider(): MarketDataProvider {
     if (!first) throw new Error("REPLAY_CSV needs INSTRUMENTS_FILE with at least one instrument");
     log("warn", "replay_mode", { file: cfg.REPLAY_CSV, instrument: first.id });
     return new ReplayProvider({ [first.id]: parseCandlesCsv(readFileSync(cfg.REPLAY_CSV, "utf8")) });
+  }
+  if (crypto) {
+    // Public exchange data (no API key): DEMO crypto trading is completely free.
+    const pub = new CcxtAdapter({
+      exchangeId: cfg.CRYPTO_EXCHANGE,
+      quoteCurrency: cfg.CRYPTO_QUOTE,
+      instruments: cfg.instruments,
+    });
+    log("info", "crypto_market_data", {
+      exchange: cfg.CRYPTO_EXCHANGE,
+      instruments: cfg.instruments.map((i) => i.id),
+    });
+    return new PollingProvider(
+      { getLtp: async (ids) => pub.getLtp(ids.map((id) => byId.get(id)!).filter(Boolean)) },
+      cfg.QUOTE_POLL_MS,
+      async (id, tf, from, to) => {
+        const sym = byId.get(id)?.venueSymbol;
+        if (!sym) return [];
+        return pub.getHistorical(
+          sym,
+          tf,
+          new Date(from ?? Date.now() - 10 * 86_400_000),
+          new Date(to ?? Date.now()),
+        );
+      },
+    );
   }
   const dataBroker = cfg.DATA_BROKER !== "none" ? createBroker(cfg.DATA_BROKER, process.env) : realBroker;
   if (!dataBroker || !isQuoteCapable(dataBroker)) {
@@ -82,7 +113,9 @@ function buildProvider(): MarketDataProvider {
 const provider = buildProvider();
 
 let egressCache: EgressStatus | null = null;
-const checkEgress = async () => {
+const checkEgress = async (): Promise<EgressStatus> => {
+  // Crypto exchanges have no SEBI static-IP rule: without a configured whitelist, don't gate on it.
+  if (crypto && cfg.WHITELISTED_EGRESS_IPS.length === 0) return { ip: null, ok: true, checkedAt: Date.now() };
   if (!egressCache || Date.now() - egressCache.checkedAt > 60_000) {
     egressCache = await checkEgressIp(cfg.WHITELISTED_EGRESS_IPS, cfg.EGRESS_IP_CHECK_URL);
     if (!egressCache.ok && realBroker)
@@ -106,11 +139,11 @@ interface RunningBook extends Book {
 function buildBook(account: AccountId): RunningBook {
   const ref: { engine?: TradingEngine } = {};
   const paper = new PaperBroker({
-    startingCash: account === "demo" ? cfg.DEMO_STARTING_CASH : 1,
+    startingCash: account === DEMO ? (crypto ? cfg.CRYPTO_DEMO_STARTING_CASH : cfg.DEMO_STARTING_CASH) : 1,
     slippageBps: 3,
     priceFeed: (id) => ref.engine?.quotes.get(id)?.ltp,
   });
-  const live = account === "real" ? realBroker! : paper;
+  const live = account === REAL ? realBroker! : paper;
   const controlPlane = new HttpControlPlane(cfg.CONTROL_PLANE_URL, cfg.GATEWAY_HMAC_SECRET, account);
   const executor = new OrderExecutor({
     nodeId: cfg.GATEWAY_NODE_ID,
@@ -131,6 +164,7 @@ function buildBook(account: AccountId): RunningBook {
       canaryCapitalPct: cfg.CANARY_CAPITAL_PCT,
       aiEnabled: cfg.AI_ENABLED,
       aiMinProbability: cfg.AI_MIN_PROBABILITY,
+      ...(crypto ? { session: CRYPTO_SESSION } : {}),
     },
     {
       executor,
@@ -159,10 +193,14 @@ function buildBook(account: AccountId): RunningBook {
   return { account, executor, engine, reporter, heartbeat };
 }
 
-const books: RunningBook[] = [buildBook("demo")];
-if (realBroker) books.push(buildBook("real"));
+const books: RunningBook[] = [buildBook(DEMO)];
+if (realBroker) books.push(buildBook(REAL));
 else
-  log("warn", "real_book_disabled", { hint: "set ACTIVE_BROKER=zerodha|upstox|dhan to enable REAL trading" });
+  log("warn", "real_book_disabled", {
+    hint: crypto
+      ? "set ACTIVE_BROKER=crypto + CRYPTO_API_KEY/CRYPTO_API_SECRET to enable REAL crypto trading"
+      : "set ACTIVE_BROKER=zerodha|upstox|dhan to enable REAL trading",
+  });
 
 const every = (ms: number, fn: () => Promise<unknown> | unknown, name: string) =>
   setInterval(() => {
@@ -223,6 +261,7 @@ const server = serve({
   port: cfg.GATEWAY_PORT,
 });
 log("info", "gateway_started", {
+  market: cfg.MARKET,
   nodeId: cfg.GATEWAY_NODE_ID,
   books: books.map((b) => b.account),
   realBroker: cfg.ACTIVE_BROKER,

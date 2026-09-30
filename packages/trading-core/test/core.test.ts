@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Instrument, RiskState } from "@atb/shared-types";
 import {
+  CRYPTO_SESSION,
   DEFAULT_LIMITS,
   PaperBroker,
   SlidingWindowLimiter,
@@ -266,5 +267,76 @@ describe("paper broker", () => {
       price: 1500,
     });
     expect(r.status).toBe("ACKNOWLEDGED");
+  });
+});
+
+describe("crypto support", () => {
+  const btc: Instrument = {
+    id: "CRYPTO:binance:BTC/USDT",
+    exchange: "CRYPTO",
+    tradingSymbol: "BTCUSDT",
+    instrumentType: "SPOT",
+    lotSize: 0.00001,
+    tickSize: 0.01,
+    venue: "binance",
+    venueSymbol: "BTC/USDT",
+  };
+
+  it("sizes fractional quantities on the step", () => {
+    const r = calculatePositionSize({
+      equity: 10_000,
+      riskPct: 0.5,
+      entry: 60_000,
+      stop: 59_400,
+      lotSize: 0.00001,
+      maxPositionValue: 1e9,
+      availableMargin: 1e9,
+      marginPerUnit: 60_000,
+      maxExposureValue: 1e9,
+    });
+    expect(r.quantity).toBeCloseTo(0.08333, 5); // 50 USDT risk / 600 stop
+    expect(Number.isInteger(Math.round(r.quantity / 0.00001))).toBe(true);
+  });
+
+  it("24x7 session is always open (weekend, night)", () => {
+    expect(sessionPhase(Date.UTC(2026, 9, 3, 20, 0), CRYPTO_SESSION)).toBe("OPEN");
+  });
+
+  it("crypto fees: taker % + GST, TDS reported separately", () => {
+    const c = estimateCosts({
+      side: "SELL",
+      quantity: 0.1,
+      price: 60_000,
+      instrumentType: "SPOT",
+      product: "DELIVERY",
+    });
+    expect(c.brokerage).toBeCloseTo(6, 4);
+    expect(c.gst).toBeCloseTo(1.08, 4);
+    expect(c.tds).toBeCloseTo(60, 4);
+    expect(c.total).toBeCloseTo(7.08, 4);
+  });
+
+  it("blocks spot shorts and cash-delivery shorts, allows perp shorts", () => {
+    const sell = {
+      instrument: btc,
+      decision: "SELL" as const,
+      entry: 60_000,
+      stop: 60_600,
+      targets: [59_400, 58_500],
+    };
+    const c = ctx({
+      product: "DELIVERY",
+      state: { ...baseState, equity: 10_000, peakEquity: 10_000 },
+      marginPerUnit: 60_000,
+    });
+    expect(evaluateTrade(sell, c).failedCheck).toBe("SHORT_NOT_ALLOWED");
+    expect(
+      evaluateTrade(
+        { ...longTrade, decision: "SELL", stop: 1515, targets: [1485, 1470] },
+        ctx({ product: "DELIVERY" }),
+      ).failedCheck,
+    ).toBe("SHORT_NOT_ALLOWED");
+    const perp = { ...sell, instrument: { ...btc, instrumentType: "PERP" as const } };
+    expect(evaluateTrade(perp, c).failedCheck).not.toBe("SHORT_NOT_ALLOWED");
   });
 });

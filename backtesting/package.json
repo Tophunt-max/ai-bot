@@ -8,7 +8,8 @@
     "download:kite": "tsx src/download-kite.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest --run",
-    "export-dataset": "tsx src/export-dataset.ts"
+    "export-dataset": "tsx src/export-dataset.ts",
+    "download:crypto": "tsx src/download-crypto.ts"
   },
   "dependencies": {
     "@atb/brokers": "workspace:*",

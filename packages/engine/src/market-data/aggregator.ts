@@ -15,10 +15,12 @@ export class CandleAggregator {
   constructor(
     private readonly timeframeMs: number,
     private readonly onClose: (c: Candle) => void,
-    private readonly sessionOpenMinutesIst = 9 * 60 + 15,
+    /** IST session open for Indian markets; null = 24x7 market aligned to UTC epoch (crypto). */
+    private readonly sessionOpenMinutesIst: number | null = 9 * 60 + 15,
   ) {}
 
   bucketStart(ts: number): number {
+    if (this.sessionOpenMinutesIst === null) return Math.floor(ts / this.timeframeMs) * this.timeframeMs;
     const dayStartIst = Math.floor((ts + IST_OFFSET_MS) / 86_400_000) * 86_400_000 - IST_OFFSET_MS;
     const sessionOpen = dayStartIst + this.sessionOpenMinutesIst * 60_000;
     const base = ts >= sessionOpen ? sessionOpen : dayStartIst;
@@ -64,8 +66,12 @@ export class CandleAggregator {
 }
 
 /** Aggregate base candles into higher-timeframe candles (e.g. 5m -> 15m), IST-aligned. */
-export function resampleCandles(candles: readonly Candle[], timeframeMs: number): Candle[] {
-  const bucket = new CandleAggregator(timeframeMs, () => undefined);
+export function resampleCandles(
+  candles: readonly Candle[],
+  timeframeMs: number,
+  alwaysOpen = false,
+): Candle[] {
+  const bucket = new CandleAggregator(timeframeMs, () => undefined, alwaysOpen ? null : 9 * 60 + 15);
   const out: Candle[] = [];
   for (const k of candles) {
     const b = bucket.bucketStart(k.t);

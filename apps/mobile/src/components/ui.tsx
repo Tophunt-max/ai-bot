@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { ACCOUNT_THEME, useAccount } from "../stores/account";
 import { BannerSlot } from "./banner-slot";
 
 export const colors = {
@@ -15,10 +16,14 @@ export const colors = {
   blue: "#4ea1ff",
 };
 
-export const inr = (n: number | undefined | null) =>
-  n === undefined || n === null || Number.isNaN(n)
-    ? "—"
-    : `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+/** Money in the selected book's currency: ₹ for Stocks, USDT for Crypto. */
+export const inr = (n: number | undefined | null) => {
+  if (n === undefined || n === null || Number.isNaN(n)) return "—";
+  const cur = ACCOUNT_THEME[useAccount.getState().account].currency;
+  return cur === "INR"
+    ? `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+    : `${n.toLocaleString("en-US", { maximumFractionDigits: n !== 0 && Math.abs(n) < 1 ? 6 : 2 })} ${cur}`;
+};
 
 export function Screen({
   children,

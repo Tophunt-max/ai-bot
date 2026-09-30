@@ -176,7 +176,14 @@ export class TradingEngine {
     const tf = TIMEFRAME_MS[this.cfg.timeframe];
     for (const inst of this.cfg.instruments) {
       this.candles.set(inst.id, []);
-      this.aggregators.set(inst.id, new CandleAggregator(tf, (c) => void this.onCandle(inst.id, c)));
+      this.aggregators.set(
+        inst.id,
+        new CandleAggregator(
+          tf,
+          (c) => void this.onCandle(inst.id, c),
+          this.cfg.session.alwaysOpen ? null : 9 * 60 + 15,
+        ),
+      );
     }
   }
 
@@ -424,6 +431,7 @@ export class TradingEngine {
         grossExposure: gross,
         minRewardRisk: this.cfg.minRewardRisk,
         maxStopDistancePct: this.cfg.maxStopDistancePct,
+        product: this.cfg.product,
       },
     );
     report({
@@ -784,7 +792,7 @@ export class TradingEngine {
       await this.trip("BROKER_FAILURE", "3 consecutive broker errors");
     }
     // Intraday positions are flattened in the square-off window even if no bar closes.
-    if (phase === "SQUARE_OFF" && this.cfg.product === "INTRADAY") {
+    if (phase === "SQUARE_OFF" && this.cfg.product === "INTRADAY" && !this.cfg.session.alwaysOpen) {
       for (const et of [...this.open.values()])
         if (!et.closing) await this.exitNow(et, this.byId.get(et.instrumentId)!, "EOD");
     }

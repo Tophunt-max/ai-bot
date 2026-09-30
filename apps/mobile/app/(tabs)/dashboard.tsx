@@ -5,7 +5,7 @@ import { api, qk } from "../../src/lib/api";
 import { useAccount } from "../../src/stores/account";
 
 export default function Dashboard() {
-  const account = useAccount((s) => s.account);
+  const { market, kind } = useAccount();
   const q = useQuery({ queryKey: qk.portfolio, queryFn: api.portfolio });
   if (q.isLoading)
     return (
@@ -27,7 +27,9 @@ export default function Dashboard() {
   return (
     <Screen title="Dashboard">
       <AccountSwitcher />
-      <Card title={account === "demo" ? "Demo portfolio (virtual money)" : "Real portfolio"}>
+      <Card
+        title={`${market === "CRYPTO" ? "Crypto" : "Stocks"} ${kind === "DEMO" ? "demo portfolio (virtual money)" : "portfolio (REAL money)"}`}
+      >
         <Row label="Total value" value={inr(d.portfolioValue)} />
         <Row label="Available capital" value={inr(d.availableCapital)} />
         <Row label="Today's P&L" value={inr(d.todayPnl)} tone={pnlTone(d.todayPnl)} />

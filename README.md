@@ -28,6 +28,14 @@ coloured banner (blue = DEMO, red = REAL MONEY), and switching to Real asks for 
 Alerts are tagged 🧪 DEMO or 💰 REAL. If `ACTIVE_BROKER=paper`, the Real book is not started at
 all.
 
+## Crypto trading
+
+A separate market with its own two books (**crypto_demo** / **crypto_real**), covering **104 exchanges
+via CCXT** (Binance, KuCoin, Bybit, Coinbase, Bitget, Delta, ZebPay, Mudrex, …). It trades 24×7,
+supports fractional quantities, and spot is long-only. Demo crypto uses free public exchange data.
+See [docs/crypto.md](docs/crypto.md): on real BTC data the current strategies do **not** pass
+walk-forward after fees.
+
 ## Architecture
 
 ```text

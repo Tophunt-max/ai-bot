@@ -23,28 +23,51 @@ export const ALLOWED_MODES: Record<Environment, readonly TradingMode[]> = {
  *  - demo: VIRTUAL money on REAL live market data (paper broker). Can never reach a real broker.
  *  - real: REAL money through the real broker (SHADOW first, then CANARY, then LIVE).
  */
-export const ACCOUNT_IDS = ["demo", "real"] as const;
+export const ACCOUNT_IDS = ["demo", "real", "crypto_demo", "crypto_real"] as const;
 export type AccountId = (typeof ACCOUNT_IDS)[number];
+
+/** Markets are fully separate books (different currency, hours, rules, broker). */
+export const MARKETS = ["STOCKS", "CRYPTO"] as const;
+export type Market = (typeof MARKETS)[number];
+export type AccountKind = "DEMO" | "REAL";
+
+export const ACCOUNT_INFO: Record<AccountId, { market: Market; kind: AccountKind }> = {
+  demo: { market: "STOCKS", kind: "DEMO" },
+  real: { market: "STOCKS", kind: "REAL" },
+  crypto_demo: { market: "CRYPTO", kind: "DEMO" },
+  crypto_real: { market: "CRYPTO", kind: "REAL" },
+};
+
+export function accountFor(market: Market, kind: AccountKind): AccountId {
+  if (market === "STOCKS") return kind === "DEMO" ? "demo" : "real";
+  return kind === "DEMO" ? "crypto_demo" : "crypto_real";
+}
 
 export const ACCOUNT_ALLOWED_MODES: Record<AccountId, readonly TradingMode[]> = {
   demo: ["PAPER", "SAFE_MODE"],
   real: ["SHADOW", "CANARY", "LIVE", "SAFE_MODE"],
+  crypto_demo: ["PAPER", "SAFE_MODE"],
+  crypto_real: ["SHADOW", "CANARY", "LIVE", "SAFE_MODE"],
 };
 
 export const DEFAULT_ACCOUNT_MODE: Record<AccountId, TradingMode> = {
   demo: "PAPER",
   real: "SAFE_MODE",
+  crypto_demo: "PAPER",
+  crypto_real: "SAFE_MODE",
 };
 
 export function isAccountId(x: unknown): x is AccountId {
-  return x === "demo" || x === "real";
+  return typeof x === "string" && (ACCOUNT_IDS as readonly string[]).includes(x);
 }
 
 // ---------------------------------------------------------------- market
-export const EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"] as const;
+/** Indian exchanges + CRYPTO (the actual crypto venue is Instrument.venue, e.g. "binance"). */
+export const EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "CRYPTO"] as const;
 export type Exchange = (typeof EXCHANGES)[number];
 
-export const INSTRUMENT_TYPES = ["EQ", "FUT", "CE", "PE", "INDEX"] as const;
+/** SPOT = crypto spot (long-only), PERP = crypto perpetual futures (long & short). */
+export const INSTRUMENT_TYPES = ["EQ", "FUT", "CE", "PE", "INDEX", "SPOT", "PERP"] as const;
 export type InstrumentType = (typeof INSTRUMENT_TYPES)[number];
 
 export const TIMEFRAMES = ["1m", "5m", "15m", "75m", "1h", "1d"] as const;
@@ -55,8 +78,16 @@ export interface Instrument {
   exchange: Exchange;
   tradingSymbol: string;
   instrumentType: InstrumentType;
+  /** Quantity step. Integer for Indian markets; fractional for crypto (e.g. 0.0001 BTC). */
   lotSize: number;
   tickSize: number;
+  /** Crypto only: CCXT exchange id ("binance", "kucoin", "delta"…) and its symbol ("BTC/USDT"). */
+  venue?: string;
+  venueSymbol?: string;
+  /** Settlement currency for P&L display: INR for Indian markets, USDT/USD/INR for crypto. */
+  quoteCurrency?: string;
+  minQty?: number;
+  minNotional?: number;
   freezeQuantity?: number;
   expiry?: string; // ISO date
   strike?: number;
@@ -287,6 +318,7 @@ export interface RiskCheckResult {
 // ---------------------------------------------------------------- brokers
 export const BROKER_IDS = [
   "paper",
+  "crypto", // any CCXT exchange; the venue is chosen per instrument / CRYPTO_EXCHANGE
   "zerodha",
   "upstox",
   "dhan",
@@ -352,3 +384,8 @@ export interface DashboardSummary {
   dailyLossRemaining: number;
   health: SystemHealth;
 }
+
+export const isCrypto = (i: Pick<Instrument, "exchange">): boolean => i.exchange === "CRYPTO";
+/** Spot crypto and cash equity delivery cannot be shorted. */
+export const canShort = (i: Pick<Instrument, "instrumentType">, product: ProductType): boolean =>
+  i.instrumentType === "SPOT" ? false : !(i.instrumentType === "EQ" && product === "DELIVERY");

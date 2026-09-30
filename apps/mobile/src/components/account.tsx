@@ -1,16 +1,17 @@
-import type { AccountId } from "@atb/shared-types";
+import type { AccountKind, Market } from "@atb/shared-types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { api, qk } from "../lib/api";
-import { ACCOUNT_THEME, useAccount } from "../stores/account";
+import { ACCOUNT_THEME, selectAccount, useAccount } from "../stores/account";
 import { colors } from "./ui";
 
-function confirmReal(): Promise<boolean> {
+function confirmReal(market: Market): Promise<boolean> {
   const msg =
-    "You are switching to the REAL MONEY account. Orders placed here use your actual broker funds. Continue?";
-  if (Platform.OS === "web") {
+    market === "CRYPTO"
+      ? "You are switching to REAL crypto trading. Orders use your actual exchange funds. Crypto is not SEBI-regulated; 30% tax + 1% TDS apply. Continue?"
+      : "You are switching to the REAL MONEY stock account. Orders use your actual broker funds. Continue?";
+  if (Platform.OS === "web")
     return Promise.resolve(typeof window !== "undefined" ? window.confirm(msg) : false);
-  }
   return new Promise((resolve) =>
     Alert.alert("Switch to REAL money?", msg, [
       { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
@@ -19,32 +20,30 @@ function confirmReal(): Promise<boolean> {
   );
 }
 
-/** Segmented DEMO | REAL switch. Switching clears all cached data so books never mix. */
-export function AccountSwitcher() {
-  const { account, setAccount } = useAccount();
-  const qc = useQueryClient();
-  const choose = async (a: AccountId) => {
-    if (a === account) return;
-    if (a === "real" && !(await confirmReal())) return;
-    qc.removeQueries();
-    await setAccount(a);
-  };
+function Segments<T extends string>({
+  options,
+  value,
+  onChange,
+  activeColor,
+}: {
+  options: Array<{ value: T; label: string }>;
+  value: T;
+  onChange: (v: T) => void;
+  activeColor: string;
+}) {
   return (
     <View style={st.switch} accessibilityRole="tablist">
-      {(["demo", "real"] as const).map((a) => {
-        const t = ACCOUNT_THEME[a];
-        const active = a === account;
+      {options.map((o) => {
+        const active = o.value === value;
         return (
           <Pressable
-            key={a}
+            key={o.value}
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
-            onPress={() => void choose(a)}
-            style={[st.seg, active && { backgroundColor: t.color }]}
+            onPress={() => onChange(o.value)}
+            style={[st.seg, active && { backgroundColor: activeColor }]}
           >
-            <Text style={[st.segText, active && { color: "#fff" }]}>
-              {t.emoji} {a === "demo" ? "Demo Trading" : "Real Trading"}
-            </Text>
+            <Text style={[st.segText, active && { color: "#fff" }]}>{o.label}</Text>
           </Pressable>
         );
       })}
@@ -52,7 +51,46 @@ export function AccountSwitcher() {
   );
 }
 
-/** Always-visible strip so it is impossible to confuse the two books. */
+/**
+ * Two switches: market (📈 Stocks | 🪙 Crypto) and type (🧪 Demo | 💰 Real). Four fully separate
+ * books. Switching clears all cached data so they never mix; REAL asks for confirmation.
+ */
+export function AccountSwitcher() {
+  const { account, market, kind, setAccount } = useAccount();
+  const qc = useQueryClient();
+  const go = async (m: Market, k: AccountKind) => {
+    const next = selectAccount(m, k);
+    if (next === account) return;
+    if (k === "REAL" && !(await confirmReal(m))) return;
+    qc.removeQueries();
+    await setAccount(next);
+  };
+  const color = ACCOUNT_THEME[account].color;
+  return (
+    <View style={{ gap: 6 }}>
+      <Segments
+        options={[
+          { value: "STOCKS", label: "📈 Stocks" },
+          { value: "CRYPTO", label: "🪙 Crypto" },
+        ]}
+        value={market}
+        onChange={(m) => void go(m, kind)}
+        activeColor={color}
+      />
+      <Segments
+        options={[
+          { value: "DEMO", label: "🧪 Demo Trading" },
+          { value: "REAL", label: "💰 Real Trading" },
+        ]}
+        value={kind}
+        onChange={(k) => void go(market, k)}
+        activeColor={color}
+      />
+    </View>
+  );
+}
+
+/** Always-visible strip so it is impossible to confuse the books. */
 export function AccountBanner() {
   const account = useAccount((s) => s.account);
   const t = ACCOUNT_THEME[account];

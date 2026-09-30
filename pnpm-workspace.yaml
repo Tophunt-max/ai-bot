@@ -9,6 +9,9 @@ allowBuilds:
   esbuild: true
   workerd: true
   sharp: false
+  bufferutil: false
+  ccxt: false
+  protobufjs: false
 
 minimumReleaseAgeExclude:
   - "@cloudflare/workers-types@5.20260930.1"

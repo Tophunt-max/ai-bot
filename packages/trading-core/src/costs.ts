@@ -41,6 +41,27 @@ export const DEFAULT_COST_RATES: CostRates = {
   gst: 0.18,
 };
 
+/**
+ * Crypto exchange fees (config — check your exchange's fee tier).
+ * Indian exchanges also charge 18% GST on fees. The 1% TDS on sells (India) is a tax
+ * pre-payment, reported separately and excluded from `total` by default.
+ */
+export interface CryptoCostRates {
+  takerFee: number;
+  makerFee: number;
+  gstOnFee: number;
+  tdsOnSell: number;
+  includeTdsInTotal: boolean;
+}
+
+export const DEFAULT_CRYPTO_COST_RATES: CryptoCostRates = {
+  takerFee: 0.001,
+  makerFee: 0.001,
+  gstOnFee: 0.18,
+  tdsOnSell: 0.01,
+  includeTdsInTotal: false,
+};
+
 export interface CostBreakdown {
   brokerage: number;
   stt: number;
@@ -48,14 +69,33 @@ export interface CostBreakdown {
   sebi: number;
   stamp: number;
   gst: number;
+  /** Crypto (India): 1% TDS on sells, reported separately. */
+  tds?: number;
   total: number;
 }
 
 export function estimateCosts(
   args: { side: Side; quantity: number; price: number; instrumentType: InstrumentType; product: ProductType },
   r: CostRates = DEFAULT_COST_RATES,
+  crypto: CryptoCostRates = DEFAULT_CRYPTO_COST_RATES,
 ): CostBreakdown {
   const turnover = args.quantity * args.price;
+  if (args.instrumentType === "SPOT" || args.instrumentType === "PERP") {
+    const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
+    const fee = turnover * crypto.takerFee; // protected LIMIT entries are marketable → taker
+    const gst = fee * crypto.gstOnFee;
+    const tds = args.side === "SELL" && args.instrumentType === "SPOT" ? turnover * crypto.tdsOnSell : 0;
+    return {
+      brokerage: round4(fee),
+      stt: 0,
+      exchange: 0,
+      sebi: 0,
+      stamp: 0,
+      gst: round4(gst),
+      tds: round4(tds),
+      total: round4(fee + gst + (crypto.includeTdsInTotal ? tds : 0)),
+    };
+  }
   const buy = args.side === "BUY";
   const isOpt = args.instrumentType === "CE" || args.instrumentType === "PE";
   const isFut = args.instrumentType === "FUT";

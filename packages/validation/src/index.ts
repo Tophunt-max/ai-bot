@@ -13,18 +13,42 @@ import {
 
 const positive = z.number().finite().positive();
 
-export const instrumentSchema = z.object({
-  id: z.string().min(3).max(64),
-  exchange: z.enum(EXCHANGES),
-  tradingSymbol: z.string().min(1).max(64),
-  instrumentType: z.enum(INSTRUMENT_TYPES),
-  lotSize: z.number().int().positive(),
-  tickSize: positive,
-  freezeQuantity: z.number().int().positive().optional(),
-  expiry: z.string().optional(),
-  strike: positive.optional(),
-  brokerTokens: z.record(z.string(), z.string()).optional(),
-});
+/** True when q is an integer multiple of step (float-tolerant, for fractional crypto steps). */
+export const isMultipleOf = (q: number, step: number) => {
+  const k = q / step;
+  return Math.abs(k - Math.round(k)) < 1e-6;
+};
+
+export const instrumentSchema = z
+  .object({
+    id: z.string().min(3).max(64),
+    exchange: z.enum(EXCHANGES),
+    tradingSymbol: z.string().min(1).max(64),
+    instrumentType: z.enum(INSTRUMENT_TYPES),
+    lotSize: positive,
+    tickSize: positive,
+    freezeQuantity: z.number().positive().optional(),
+    expiry: z.string().optional(),
+    strike: positive.optional(),
+    brokerTokens: z.record(z.string(), z.string()).optional(),
+    venue: z.string().min(2).max(40).optional(),
+    venueSymbol: z.string().min(3).max(40).optional(),
+    quoteCurrency: z.string().min(2).max(10).optional(),
+    minQty: positive.optional(),
+    minNotional: positive.optional(),
+  })
+  .refine((i) => i.exchange === "CRYPTO" || Number.isInteger(i.lotSize), {
+    message: "lotSize must be an integer for Indian markets",
+    path: ["lotSize"],
+  })
+  .refine((i) => i.exchange !== "CRYPTO" || (!!i.venue && !!i.venueSymbol), {
+    message: "crypto instruments need venue (e.g. binance) and venueSymbol (e.g. BTC/USDT)",
+    path: ["venue"],
+  })
+  .refine((i) => (i.exchange === "CRYPTO") === (i.instrumentType === "SPOT" || i.instrumentType === "PERP"), {
+    message: "SPOT/PERP only on CRYPTO, and CRYPTO only with SPOT/PERP",
+    path: ["instrumentType"],
+  });
 
 export const orderRequestSchema = z
   .object({
@@ -35,7 +59,7 @@ export const orderRequestSchema = z
       .regex(/^[A-Za-z0-9_-]+$/),
     instrument: instrumentSchema,
     side: z.enum(SIDES),
-    quantity: z.number().int().positive(),
+    quantity: positive,
     orderType: z.enum(ORDER_TYPES),
     product: z.enum(PRODUCT_TYPES),
     price: positive,
@@ -46,7 +70,11 @@ export const orderRequestSchema = z
     message: "SL_LIMIT requires triggerPrice",
     path: ["triggerPrice"],
   })
-  .refine((o) => o.quantity % o.instrument.lotSize === 0, {
+  .refine((o) => o.instrument.exchange === "CRYPTO" || Number.isInteger(o.quantity), {
+    message: "quantity must be an integer for Indian markets",
+    path: ["quantity"],
+  })
+  .refine((o) => isMultipleOf(o.quantity, o.instrument.lotSize), {
     message: "quantity must be a multiple of lotSize",
     path: ["quantity"],
   });

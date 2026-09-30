@@ -180,6 +180,60 @@ describe("gateway event ingestion (real D1)", () => {
     ]);
   });
 
+  it("journals CRYPTO trades (fractional qty, CRYPTO instrument) in the crypto_demo book", async () => {
+    const cryptoEvents: IngestEvent[] = [
+      {
+        id: "close-c1",
+        type: "TRADE_CLOSED",
+        at: t0 + 10,
+        mode: "PAPER",
+        payload: {
+          key: "c1",
+          instrumentId: "CRYPTO:binance:BTC/USDT",
+          strategy: "BREAKOUT",
+          regime: "STRONG_BULL",
+          side: "BUY",
+          qty: 0.01234,
+          entry: 60_000,
+          exit: 61_200,
+          stop: 59_400,
+          targets: [60_600, 61_200, 62_100],
+          riskAmount: 7.4,
+          quality: 0.6,
+          fees: 1.75,
+          slippage: 0.2,
+          grossPnl: 14.8,
+          pnl: 13.05,
+          rMultiple: 1.76,
+          mfe: 16,
+          mae: -2,
+          holdingTimeMs: 7_200_000,
+          openedAt: t0,
+          closedAt: t0 + 10,
+          modelVersion: "rules-ensemble-1.0.0",
+          signalId: "x",
+          exitReason: "TP2",
+        },
+      },
+    ];
+    const r = await ingestEvents(env, "crypto_demo", "test-node", cryptoEvents);
+    expect(r.inserted).toBe(1);
+    expect(r.notifications[0]!.message).toContain("CRYPTO DEMO");
+    const t = await env.DB.prepare(
+      "SELECT quantity, account_id FROM trades WHERE id = 'crypto_demo:c1'",
+    ).first();
+    expect(t).toEqual({ quantity: 0.01234, account_id: "crypto_demo" });
+    const i = await env.DB.prepare(
+      "SELECT exchange, instrument_type, venue, quote_currency FROM instruments WHERE id = 'CRYPTO:binance:BTC/USDT'",
+    ).first();
+    expect(i).toEqual({
+      exchange: "CRYPTO",
+      instrument_type: "SPOT",
+      venue: "binance",
+      quote_currency: "USDT",
+    });
+  });
+
   it("audit log is append-only", async () => {
     await env.DB.prepare(
       "INSERT INTO audit_logs (id, actor, action, created_at) VALUES ('a1','t','x',1)",

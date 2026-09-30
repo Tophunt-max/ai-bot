@@ -65,7 +65,7 @@ export interface BarUpdate {
   squareOff: boolean;
 }
 
-const roundLots = (qty: number, lot: number) => Math.floor(qty / lot + 1e-9) * lot;
+const roundLots = (qty: number, lot: number) => Number((Math.floor(qty / lot + 1e-9) * lot).toFixed(10));
 
 export function openTrade(args: {
   id: string;
@@ -116,7 +116,7 @@ export function onBar(tr: ManagedTrade, b: BarUpdate, p: ExitPolicy = DEFAULT_EX
   const exit = (reason: ExitReason, qty: number, price: number) => {
     const q = Math.min(tr.qty, qty);
     if (q <= 0) return;
-    tr.qty -= q;
+    tr.qty = Number((tr.qty - q).toFixed(10));
     fills.push({ reason, qty: q, price });
   };
   const stopReason = (): ExitReason =>

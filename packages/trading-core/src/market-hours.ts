@@ -5,6 +5,8 @@
 const IST_OFFSET_MIN = 330;
 
 export interface SessionConfig {
+  /** Crypto markets trade 24x7: no pre-open, no square-off, no holidays. */
+  alwaysOpen?: boolean;
   preOpenStart: string; // "09:00"
   open: string; // "09:15"
   noNewEntriesAfter: string; // "15:00" — our own rule
@@ -41,7 +43,10 @@ function hm(s: string): number {
 
 export type SessionPhase = "CLOSED" | "PRE_OPEN" | "OPEN" | "NO_NEW_ENTRIES" | "SQUARE_OFF";
 
+export const CRYPTO_SESSION: SessionConfig = { ...DEFAULT_SESSION, alwaysOpen: true, holidays: [] };
+
 export function sessionPhase(epochMs: number, cfg: SessionConfig = DEFAULT_SESSION): SessionPhase {
+  if (cfg.alwaysOpen) return "OPEN";
   const { date, minutes, weekday } = toIst(epochMs);
   if (weekday === 0 || weekday === 6 || cfg.holidays.includes(date)) return "CLOSED";
   if (minutes >= hm(cfg.close) || minutes < hm(cfg.preOpenStart)) return "CLOSED";

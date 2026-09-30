@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Candle, Instrument } from "@atb/shared-types";
-import { sessionPhase, toIst } from "@atb/trading-core";
+import { CRYPTO_SESSION, DEFAULT_LIMITS, sessionPhase, toIst } from "@atb/trading-core";
 import {
   CandleAggregator,
   FeatureFrame,
@@ -16,6 +16,7 @@ import {
   runBacktest,
   runWalkForward,
   sma,
+  synthetic24x7,
   syntheticSession,
   validateCandles,
 } from "../src/index";
@@ -204,5 +205,48 @@ describe("walk-forward", () => {
     expect(wf.folds).toHaveLength(2);
     for (const f of wf.folds) expect(f.testFrom).toBeGreaterThanOrEqual(f.trainTo);
     expect(["PASS", "FAIL"]).toContain(wf.verdict);
+  });
+});
+
+describe("crypto (24x7) backtest", () => {
+  const btc: Instrument = {
+    id: "CRYPTO:binance:BTC/USDT",
+    exchange: "CRYPTO",
+    tradingSymbol: "BTCUSDT",
+    instrumentType: "SPOT",
+    lotSize: 0.00001,
+    tickSize: 0.01,
+    venue: "binance",
+    venueSymbol: "BTC/USDT",
+    quoteCurrency: "USDT",
+  };
+  const candles = synthetic24x7({ days: 40 });
+  const r = runBacktest([{ instrument: btc, candles }], {
+    timeframeMs: TF,
+    session: CRYPTO_SESSION,
+    product: "DELIVERY",
+    marginFraction: 1,
+    initialCapital: 10_000,
+    limits: { ...DEFAULT_LIMITS, maxPositionValue: 3_000 },
+  });
+
+  it("trades around the clock with fractional sizes and never shorts spot", () => {
+    expect(r.trades.length).toBeGreaterThan(3);
+    expect(r.trades.every((t) => t.side === "BUY")).toBe(true);
+    expect(r.trades.some((t) => !Number.isInteger(t.qty))).toBe(true);
+    const hoursIst = new Set(r.trades.map((t) => (toIst(t.openedAt).minutes / 60) | 0));
+    expect([...hoursIst].some((h) => h < 9 || h >= 16)).toBe(true); // outside NSE hours
+    expect(r.signals.rejectedBy.SHORT_NOT_ALLOWED ?? 0).toBeGreaterThan(0);
+    const sum = r.trades.reduce((s, t) => s + t.netPnl, 0);
+    expect(r.equity.at(-1)!.equity).toBeCloseTo(10_000 + sum, 4);
+  });
+
+  it("aligns 24x7 candles to UTC buckets", () => {
+    const closed: Candle[] = [];
+    const agg = new CandleAggregator(TF, (c) => closed.push(c), null);
+    const t = Date.UTC(2026, 9, 4, 1, 2, 30); // Sunday
+    agg.onTick({ instrumentId: "x", ltp: 1, timestamp: t, qty: 1 });
+    agg.onTick({ instrumentId: "x", ltp: 2, timestamp: t + TF, qty: 1 });
+    expect(closed[0]!.t % TF).toBe(0);
   });
 });

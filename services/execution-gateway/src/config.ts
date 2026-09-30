@@ -9,6 +9,12 @@ const bool = z
   .transform((s) => s === "true" || s === "1");
 
 const schema = z.object({
+  /** Which market this gateway runs: Indian stocks (demo/real) or crypto (crypto_demo/crypto_real). */
+  MARKET: z.enum(["STOCKS", "CRYPTO"]).default("STOCKS"),
+  /** CCXT exchange id for crypto (binance, kucoin, bybit, delta, zebpay…). */
+  CRYPTO_EXCHANGE: z.string().default("binance"),
+  CRYPTO_QUOTE: z.string().default("USDT"),
+  CRYPTO_DEMO_STARTING_CASH: z.coerce.number().positive().default(10_000),
   GATEWAY_NODE_ID: z.string().min(3).max(40),
   GATEWAY_PORT: z.coerce.number().int().default(8080),
   CONTROL_PLANE_URL: z.url(),
@@ -57,8 +63,13 @@ export function loadInstruments(file?: string): Instrument[] {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const cfg = schema.parse({ ...env, DEMO_STARTING_CASH: env.DEMO_STARTING_CASH ?? env.PAPER_STARTING_CASH });
-  if (cfg.ACTIVE_BROKER !== "paper" && cfg.WHITELISTED_EGRESS_IPS.length === 0) {
+  // SEBI static-IP rule applies to Indian brokers. Crypto exchanges don't require it (IP-restricting
+  // your API key on the exchange is still strongly recommended).
+  if (cfg.MARKET === "STOCKS" && cfg.ACTIVE_BROKER !== "paper" && cfg.WHITELISTED_EGRESS_IPS.length === 0) {
     throw new Error("WHITELISTED_EGRESS_IPS is required when ACTIVE_BROKER is a real broker");
+  }
+  if (cfg.MARKET === "CRYPTO" && !["paper", "crypto"].includes(cfg.ACTIVE_BROKER)) {
+    throw new Error("MARKET=CRYPTO supports ACTIVE_BROKER=paper (demo only) or crypto (CCXT exchange)");
   }
   if (cfg.WHITELISTED_EGRESS_IPS.length > 2) {
     throw new Error("brokers allow at most 2 whitelisted IPs (primary + secondary)");
@@ -66,5 +77,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
   if (cfg.AI_ENABLED && cfg.AI_SERVICE_SECRET.length < 32) {
     throw new Error("AI_ENABLED requires AI_SERVICE_SECRET (>= 32 chars)");
   }
-  return { ...cfg, instruments: loadInstruments(cfg.INSTRUMENTS_FILE) };
+  if (cfg.MARKET === "CRYPTO") {
+    // Crypto spot is held (no intraday square-off) and fully paid (no leverage) unless overridden.
+    if (!env.PRODUCT) cfg.PRODUCT = "DELIVERY";
+    if (!env.MARGIN_FRACTION) cfg.MARGIN_FRACTION = 1;
+  }
+  const instruments = loadInstruments(cfg.INSTRUMENTS_FILE);
+  const wrong = instruments.filter((i) => (cfg.MARKET === "CRYPTO") !== (i.exchange === "CRYPTO"));
+  if (wrong.length)
+    throw new Error(`instruments ${wrong.map((i) => i.id).join(", ")} do not belong to MARKET=${cfg.MARKET}`);
+  return { ...cfg, instruments };
 }

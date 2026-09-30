@@ -292,6 +292,12 @@ describe("account separation", () => {
     expect(() => checkModeChange("production", cur, "LIVE", "ENABLE LIVE", "demo")).toThrow(/DEMO/);
     expect(() => checkModeChange("production", cur, "PAPER", undefined, "real")).toThrow(/REAL/);
     expect(() => checkModeChange("production", cur, "SHADOW", undefined, "real")).not.toThrow();
+    expect(() => checkModeChange("production", cur, "LIVE", "ENABLE LIVE", "crypto_demo")).toThrow(
+      /CRYPTO_DEMO/,
+    );
+    expect(() => checkModeChange("production", cur, "PAPER", undefined, "crypto_real")).toThrow(
+      /CRYPTO_REAL/,
+    );
   });
 
   it("rejects unknown account headers", async () => {
